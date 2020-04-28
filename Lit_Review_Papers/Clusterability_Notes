@@ -1,7 +1,0 @@
-* A dataset is clusterable if such groups exists.
-* Variety in data distributions and inadequate formalization of basic notions of clustering  causes determination of clusterability to be a difficult task.
-* Evaluating clusterability before application can be helpful because clustering algorithms can be expensive.
-* Some approaches posit that a dataset is clusterable if the minimum between-cluster seperation is greater than the intra-cluster distance, or when each element is closer to all elements in its cluster than to all other data.
-* Other approaches to data clusterability are linked to the feasibility of producing a clustering. Data that are hard to cluster do not have a meaningful clustering clustering structure. 
-* A good clusterability detection method should serve to inuence a decision as to whether to cluster at all
-* There are many possibilities used to detect clustering. The simplest way is the use of plots. A principal component plot can be used to give a good representation of the data because the highest amount of variance is explained by the first eigenvectors. In some cases, however, the clustering will become apparent only in plots of higher PCs so that one should look at several score plots.
