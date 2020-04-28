@@ -1,0 +1,138 @@
+---
+title: "Visualization Example"
+author: "Elijah Willie"
+date: "10/6/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+gc()
+options(warn=-1)
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(reticulate)
+  library(splatter)
+  library(SingleCellExperiment)
+  library(ggplot2)
+  library(dplyr)
+  library(clue)
+  library(pcaReduce)
+  library(parallelDist)
+  library(data.table)
+  library(multiview)
+  library(cowplot)
+  library(diptest)
+  library(pheatmap)
+  library(ggplotify)
+  }
+)
+# source required functions
+setwd("~/Documents/Clusterability/scripts/")
+source("Helper_Functions.R")
+source("~/Documents/scrna2019-master/algs/glmpca.R")
+source("~/Documents/scrna2019-master/util/functions.R")
+source("~/Documents/scrna2019-master/util/functions_genefilter.R")
+source("Pipeline_Functions.R")
+source("Clustering_Functions.R")
+source("func.R")
+# source("RaceID2_StemID_class.R")
+use_virtualenv("r-reticulate")
+```
+
+# Generate the simulated data
+```{r}
+params.groups <- newSplatParams(batchCells = 10000, nGenes = 5000, seed = 1994)
+
+# run simulations
+sim <- splatSimulateGroups(params.groups, group.prob = c(0.5,0.5), de.facLoc = c(1)*0.11,
+                             de.facScale = c(0.5,0.5)*0.15, verbose = FALSE)
+meta.data <- colData(sim)
+trueLabels <- as.numeric(as.factor(meta.data$Group))
+sim <- scater::normalize(sim)
+p.sim.0.1 <- scater::plotPCA(sim, colour_by = "Group") + theme_grey() + ggtitle("PCA plot of single group using all genes") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+```
+
+# Run the pipeline
+```{r}
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sim))
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# obj <- .ConsensusTest(obj)
+# obj <- .ConsensusTest(obj, method = "Scrna")
+# obj <- .ConsensusTest(obj, method = "SCTransform")
+# 
+# seurat <- as.data.frame(unlist(obj@Tests$Seurat$Consensus))
+# colnames(seurat) <- c("Seurat.Dip.Pvalue")
+# 
+# sctransfrom <- as.data.frame(unlist(obj@Tests$SCTransform$Consensus))
+# colnames(sctransfrom) <- c("SCTransform.Dip")
+# 
+# scrna <- as.data.frame(unlist(obj@Tests$Scrna$Consensus))
+# colnames(scrna) <- c("Scrna.Dip.Pvalue")
+# 
+# res.table <- cbind(scrna, seurat, sctransfrom)
+# colnames(res.table) <- c("Seurat", "Scrna", "SCTransform")
+
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+obj <- TestModality(obj, type = "SCTransform")
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+sctransfrom <- as.data.frame(unlist(obj@Tests$SCTransform))
+colnames(sctransfrom) <- c("SCTransform.Dip")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat, sctransfrom)
+colnames(res.table) <- c("Seurat", "Scrna", "SCTransform")
+
+# plot heat map
+obj.heatmap <- pheatmap::pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, main = paste("Dip Heatmap"), display_numbers = T, number_color = "black")
+heatmap.dip <- ggplotify::as.ggplot(obj.heatmap)
+```
+
+# Plot the Results
+```{r}
+# Run PCA
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+sctran_pca_df <- as.data.frame(obj@SCTransform$Sig.PCs.Data[, 1:2])
+
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.sctran <- ggplot(sctran_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("SCTransform PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# combine the plots
+# combine the plots
+plots.final <- plot_grid(p.pca,p.pca.scrna,p.pca.sctran,heatmap.dip,
+               labels = c("A", "B", "C", "D"))
+```
+
+
+```{r}
+counts <- fread("../Data/MB.matrix.txt") %>% column_to_rownames(var = "V1")
+```
+

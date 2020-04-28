@@ -1,0 +1,89 @@
+---
+title: "Accuracy Simulations"
+author: "Elijah Willie"
+date: "May 15, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::knit_engines$set(python = reticulate::eng_python)
+```
+
+# Load required libraries
+```{r}
+setwd("/home/elijah/Documents/Clusterability")
+rm(list = ls())
+gc()
+library(splatter)
+library(data.table)
+library(diptest)
+library(Seurat)
+library(PPCI)
+library(parallelDist)
+source("Helper_Functions.R")
+library(SingleCellExperiment)
+library(scater)
+library(kernlab)
+library(RUVcorr)
+library(RANN)
+library(reticulate)
+library(ggplot2)
+library(igraph)
+use_virtualenv("r-reticulate")
+use_python("/usr/local/bin/python3")
+```
+
+# Define vectors to hold results
+```{r}
+genes_seq <- seq(1000, 10000, 1000)
+
+```
+
+# Run the simulations
+```{r}
+results <- c()
+prob_vec <- c(1)
+for(i in genes_seq){
+  print(i)
+  curr_res <- c()
+  for(j in 1:50){
+    
+    scale_vec <- rep(1)
+    params.groups <- newSplatParams(batchCells = 1000, nGenes = i, seed = 1994)
+    sim <- splatSimulateGroups(params.groups, group.prob = prob_vec, de.facLoc = scale_vec, de.facScale = scale_vec, verbose = FALSE)
+    
+    # extract the counts
+    sim_counts <- as.data.frame(counts(sim))
+  
+    # create a seurat object
+    obj <- CreateSeuratObject(raw.data = sim_counts, project = "Sim", minCells = 5, minGenes = 200)
+  
+    #Preprocess the data
+    obj <- .PreProcess(obj, low_thres = c(200, -Inf, -Inf), high_thres = c(i, 0.05, Inf))
+    obj <- ScaleData(obj, num.cores = 4)
+    
+    # get the variable genes
+    #get the variable genes sorted
+    varGenes <- .SortGenes(obj)
+    
+    #get the data containing the top genes
+    obj_sub <- .GetGeneData(obj, varGenes$gene)
+    obj_sub <- as.data.frame(obj_sub)
+    
+    rm(obj)
+    #do some garbage collection
+    gc()
+    
+    # run MDH
+    X <- t(obj_sub)
+    sol <- mdh(X)
+    # use euclidean distances
+    sol_dist <- parallelDist(sol$fitted)
+    dip_stat <- dip.test(sol_dist, simulate.p.value = T, B = 100)$p.value
+    
+    curr_res <- c(curr_res, dip_stat)
+  }
+  results <-c(results, mean(curr_res >= 0.05))
+}
+```
+

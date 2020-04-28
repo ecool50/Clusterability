@@ -1,0 +1,647 @@
+---
+title: "Simulations"
+author: "Elijah Willie"
+date: "May 15, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::knit_engines$set(python = reticulate::eng_python)
+```
+
+# Load required libraries
+```{r}
+setwd("/home/elijah/Documents/Clusterability")
+# source the required packages
+rm(list = ls())
+gc()
+library(splatter)
+library(data.table)
+library(diptest)
+library(Seurat)
+library(PPCI)
+library(parallelDist)
+library(SingleCellExperiment)
+library(scater)
+library(kernlab)
+library(RUVcorr)
+library(RANN)
+library(reticulate)
+library(ggplot2)
+library(igraph)
+library(swne)
+source("Helper_Functions.R")
+source("/home/elijah/Documents/scrna2019/algs/glmpca.R")
+source("/home/elijah/Documents/scrna2019/util/functions.R")
+source("/home/elijah/Documents/scrna2019/util/functions_genefilter.R")
+use_virtualenv("r-reticulate")
+use_python("/usr/local/bin/python3")
+```
+
+# set simulation parameters
+```{r}
+facScale_seq <- seq(0, 0.5, by = 0.005)
+cells_seq <- seq(1000, 10000, 100)
+gene_seq <- seq(1000, 10000, 100)
+prob_vec <- c(1)
+```
+
+
+# Simulate some data
+```{r}
+mdh_res_eucl <- c()
+full_res <- c()
+mdh_res_man <- c()
+mdh_res_p <- c()
+pc_res <- c()
+full_res_eucl <- c()
+full_res_dip_stat <- c()
+full_res_eucl_dip_stat <- c()
+#pdf("Results/Single_Group_Cells_Simulation_plots.pdf")
+for(i in cells_seq){
+  print(i)
+  params.groups <- newSplatParams(batchCells = i, nGenes = 1000, seed = 1994)
+
+  # simulate DE probabilities
+  loc_vec <- c(1)
+  scale_vec <- rep(1,3)*0.4
+  
+  sim <- splatSimulateGroups(params.groups, group.prob = prob_vec, de.facLoc = scale_vec, de.facScale = scale_vec, verbose = FALSE)
+  
+  
+  # extract the counts
+  sim_counts <- as.data.frame(counts(sim))
+
+  # create a seurat object
+  obj <- CreateSeuratObject(raw.data = sim_counts, project = "Sim", minCells = 5, minGenes = 200)
+
+  #Preprocess the data
+  obj <- .PreProcess(obj, low_thres = c(200, -Inf, -Inf), high_thres = c(3000, 0.05, Inf))
+  obj <- ScaleData(obj, num.cores = 4)
+  
+  # run PCA
+  obj <- RunPCA(object = obj, do.print = F, pcs.compute = 25)
+  
+  # compute the significant PCS
+  # obj <- JackStraw(object = obj, num.replicate = 100, num.cores = 4,do.par = T, display.progress = F)
+  # sig_indices <- which(obj@dr$pca@jackstraw@overall.p.values[, 2] < 0.05)
+  
+  # run the dip test on the first PC
+  pc1 <- obj@dr$pca@gene.loadings[, 1]
+  pc_dip <- dip.test(pc1)$p.value
+  pc_res <- c(pc_res, round(pc_dip,4))
+  
+    # plot the results
+#   hist(pc1, breaks = 100, main = paste("Simulation \nfirst PC on Min Density Hyperplane", "\nDip Test p-value =",  round(pc_dip,4), ", numGenes =", i), xlab = "Distance", probability = T, col = "lightblue")
+# lines(density(pc1), col="red", lwd=2)
+  
+  # get the variable genes sorted
+  varGenes <- .SortGenes(obj)
+
+  # get the data containing the top genes
+  obj_sub <- .GetGeneData(obj, varGenes$gene)
+  
+  # run dip test on the full dataset
+  full_dist <- - WGCNA::cor(obj_sub)
+  full_dist_eucl <- parallelDist(t(obj_sub))
+  eucl_dip <- dip.test(full_dist_eucl, simulate.p.value = T, B = 100)
+  dip <- dip.test(full_dist, simulate.p.value = T, B = 100)
+  full_dip <- dip$p.value[[1]]
+  full_dip_stat <- dip$statistic[[1]]
+  full_dip_eucl <- eucl_dip$p.value[[1]]
+  full_dip_stat_eucl <- eucl_dip$statistic[[1]]
+  
+  # plot the results
+#   hist(full_dist, breaks = 100, main = paste("Simulation \nfull data plot on Min Density Hyperplane", "\nDip Test p-value =",  round(full_dip,4), ", numGenes =", i), xlab = "Distance", probability = T, col = "lightblue")
+# lines(density(full_dist), col="red", lwd=2)
+  
+  # run MDH
+  X <- t(obj_sub)
+  sol <- mdh(X)
+  
+  # use euclidean distances
+  sol_dist <- parallelDist(sol$fitted)
+  dip_stat <- dip.test(sol_dist)$p.value
+  
+  # plot the results
+#   hist(sol_dist, breaks = 100, main = paste("Simulation \nEuclidean density plot on Min Density Hyperplane", "\nDip Test p-value =",  round(dip_stat,4), ", numGenes =", i), xlab = "Distance", probability = T, col = "lightblue")
+# lines(density(sol_dist), col="red", lwd=2)
+
+  # use manhattan distance
+  sol_dist_man <- parallelDist(sol$fitted, method = "minkowski", p = 1.0)
+  dip_stat_man <- dip.test(sol_dist_man, simulate.p.value = T, B = 100)$p.value
+  
+  # plot the results
+#   hist(sol_dist_man, breaks = 100, main = paste("Simulation \nManhattan density plot on Min Density Hyperplane", "\nDip Test p-value =",  round(dip_stat_man,4), ", numGenes =", i), xlab = "Distance", probability = T, col = "lightblue")
+# lines(density(sol_dist_man), col="red", lwd=2)
+
+# use p = 0.1
+sol_dist_p <- parallelDist(sol$fitted, method = "minkowski", p = 0.1)
+dip_stat_p <- dip.test(sol_dist_p, simulate.p.value = T, B = 100)$p.value
+
+# plot the results
+# hist(sol_dist_p, breaks = 100, main = paste("Simulation \nMinkowski p = 0.1 density plot on Min Density Hyperplane", "\nDip Test p-value =",  round(dip_stat_p,4), ", numGenes =", i), xlab = "Distance", probability = T, col = "lightblue")
+# lines(density(sol_dist_p), col="red", lwd=2)
+
+# update the results lists
+mdh_res_eucl <- c(mdh_res_eucl, round(dip_stat,4))
+full_res <- c(full_res, round(full_dip,4))
+mdh_res_man <-c(mdh_res_man, round(dip_stat_man,4))
+mdh_res_p <- c(mdh_res_p, round(dip_stat_p, 4))
+full_res_dip_stat <- c(full_res_dip_stat, round(full_dip_stat,4))
+full_res_eucl <- c(full_res_eucl, round(full_dip_eucl,4))
+full_res_eucl_dip_stat <- c(full_res_eucl_dip_stat, full_dip_stat_eucl)
+rm(sim, full_dist, full_dist_eucl, sol_dist_man, sol_dist)
+
+  gc()
+
+}
+
+# # write the results to a table
+result_table <- data.frame(cells_seq[1:16], full_res_dip_stat, full_res, full_res_eucl , full_res_eucl_dip_stat, mdh_res_eucl, mdh_res_man, mdh_res_p, pc_res[1:16])
+colnames(result_table) <- c("numCells", "Correlation_data_dip_stat", "Correlation_data_Dip", "Euclidean_data_dip",
+                            "Euclidean_data_dip_stat", "MDH_eucl_dip", "MDH_man_dip", "MDH_minkowsi_p_0.1", "PC1_dip")
+
+dip_vals <- melt(result_table, id.vars = "numCells", measure.vars = c("Correlation_data_dip_stat", "Euclidean_data_dip_stat"))
+dip_plot <- ggplot2::ggplot(dip_vals) + geom_point(aes(numCells, value, color = variable)) +
+                                        xlab("Number of Cells") + ylab("Dip Statistic") + theme_gray() +
+                                            ggtitle("Dip Statistic as a function of Number of Cells") +
+                                                         facet_grid(. ~ variable)
+
+
+dip_pvals <- melt(result_table, id.vars = "numCells", measure.vars = c("Correlation_data_Dip", "Euclidean_data_dip",
+                                                              "MDH_eucl_dip", "MDH_man_dip", "MDH_minkowsi_p_0.1", "PC1_dip"))
+
+pvals_plot <- ggplot2::ggplot(dip_pvals) + geom_point(aes(numCells, value, color = variable)) +
+                                        xlab("Number of Cells") + ylab("P value") + theme_gray() +
+                                            ggtitle("Dip p value as a function of Number of Cells") +
+                                                  facet_grid(. ~ variable) +
+                                            geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+
+# normalize and visualize the data
+sim_norm <- scater::normalize(sim)
+p <- scater::plotPCA(sim_norm) + ggtitle("One Group PCA Plot")
+#plot(p)
+rm(sim_norm)
+gc()
+  pdf("Results/Splatter_Results/Single_group_cells_simulated.pdf", width = 14, height = 14)
+  p
+  dip_plot
+  pvals_plot
+  dev.off()
+  # write the table to file
+  write.csv(result_table, "Results/Splatter_Results/Single_group_cells_table_simulated.csv")
+
+# res_df <- data.frame(facScale_seq, mdh_res, full_res)
+# pdf("Results/facScale_Cor_Simulation_results_plots.pdf")
+# # plot the results
+# p1 <- ggplot(data = res_df, aes(facScale_seq)) + 
+#   geom_line(aes(y = mdh_res, colour = "mdh")) + 
+#     geom_line(aes(y = full_res, colour = "full")) +
+#       labs(x = "Cluster numGenes", y = "P_value", title = "P_value as a function of cluster numGenes")
+#         
+# 
+# p2 <- ggplot(data = res_df, aes(facScale_seq)) + 
+#   geom_point(aes(y = mdh_res, colour = "mdh")) +
+#     labs(x = "Cluster numGenes", y = "P_value", title = "P_value as a function of cluster numGenes")
+# 
+# 
+# p3 <- ggplot(data = res_df, aes(facScale_seq)) + 
+#   geom_point(aes(y = full_res, colour = "full")) +
+#     labs(x = "Cluster numGenes", y = "P_value", title = "P_value as a function of cluster numGenes")
+# 
+# 
+# 
+# plot(p1)
+# plot(p2)
+# plot(p3)
+# 
+# dev.off()
+# simulate some groups
+# rm(list = ls())
+# gc()
+# params.groups <- newSplatParams(batchCells = 10000, nGenes = 5000, seed = 1994)
+
+# batch.facLoc controls variance explained.
+# batch.facScale controls how seperated clusters are
+# out.prob controls the probability that a gene is an outlier
+# params <- newSplatParams()
+# params <- setParam(params, "nGenes", 15000)
+# sim <- splatSimulate(params, batchCells = c(1000), out.prob = 0.2, verbose = FALSE)
+# 
+# ggplot(as.data.frame(rowData(sim)),
+#        aes(x = log10(GeneMean), fill = OutlierFactor != 1)) +
+#     geom_histogram(bins = 100) +
+#     ggtitle("Lots of outliers")
+# 
+# # visualize the simulated dataset
+#  sim_norm <- scater::normalize(sim)
+#  p <- scater::plotPCA(sim_norm, colour_by = "Batch")
+
+
+# simulate group probabilities
+# prob_vec <- sample(1:100,3,replace=T)
+# prob_vec <- prob_vec/sum(prob_vec)
+# 
+# # simulate DE probabilities
+# loc_vec <- c(0.1, 0.1, 0.1)
+# scale_vec <- c(0.1, 0.1, 0.3)
+
+# # simulate groups
+# group_sim <- splatSimulateGroups(params.groups, group.prob = prob_vec, de.facLoc = loc_vec, de.facScale = scale_vec,
+#                             verbose = FALSE)
+# 
+# # visualize groups
+# group_norm <- scater::normalize(group_sim)
+# scater::plotPCA(group_norm, colour_by = "Group")
+
+# simulate DE genes
+#de_sim <- splatSimulateGroups(params.groups, group.prob = prob_vec, de.prob = 0.01,
+                            #verbose = FALSE)
+
+# visualize the data
+#de_sim_norm <- scater::normalise(de_sim)
+#scater::plotPCA(de_sim_norm, colour_by = "Group")
+```
+
+
+# Run pipeline on simulated data
+```{r}
+# extract simulation counts
+sim_counts <- counts(sim)
+
+# create a seurat object
+obj <- CreateSeuratObject(raw.data = sim_counts, project = "Sim", minCells = 5, minGenes = 200)
+
+# do some visualization
+#VlnPlot(object = obj, features.plot = c("nGene", "nUMI"), nCol = 2)
+
+#Preprocess the data
+obj <- .PreProcess(obj, low_thres = c(200, -Inf, -Inf), high_thres = c(15000, 0.05, Inf))
+obj <- ScaleData(obj, num.cores = 4)
+
+#compute the number of variable genes
+length(obj@var.genes)
+```
+
+# Sort the highly variable by dispersion
+```{r}
+#get the variable genes sorted
+varGenes <- .SortGenes(obj)
+
+#get the data containing the top genes
+obj_sub <- .GetGeneData(obj, varGenes$gene)
+obj_sub <- as.data.frame(obj_sub)
+
+#rm(obj)
+#do some garbage collection
+gc()
+```
+
+# Kernel PCA
+```{r}
+# compute kernel matrix
+rbf <- rbfdot(sigma = 0.05)
+K <- kernelMatrix(rbf, t(obj_sub))
+
+# run kernel PCA
+U <- kpca(obj_sub, kernel = "rbfdot", kpar = list(sigma = 0.5), features = ceiling(nrow(obj_sub)/2))@pcv
+
+# compute the features projections
+K_prime <- t(U)%*%K%*%U
+
+temp <- t(obj_sub)%*%U
+# compute MDH on the projected data
+sol <- mdh(temp)
+```
+
+# RUVcorr Simulating
+```{r}
+yind <- simulateGEdata(n=3000, m=1000, k=10, size.alpha=2, corr.strength=5, g=NULL, Sigma.eps=0.1, nc=2000, ne=1000, intercept=TRUE, check=TRUE)
+
+Ydep <- simulateGEdata(n=3000, m=1000, k=10, size.alpha=2,
+corr.strength=5, g=2, Sigma.eps=0.1,
+nc=2000, ne=1000, intercept=TRUE, check=TRUE)
+```
+
+# Community Detection
+```{r}
+# compute the nearest neighbours
+knn.info <- RANN::nn2(t(obj_sub), k=30)
+
+# get the adjacency matrix
+knn <- knn.info$nn.idx
+adj <- matrix(0, ncol(obj_sub), ncol(obj_sub))
+rownames(adj) <- colnames(adj) <- colnames(obj_sub)
+for(i in seq_len(ncol(obj_sub))) {
+    adj[i,colnames(obj_sub)[knn[i,]]] <- 1
+}
+
+# construct the graph
+g <- igraph::graph.adjacency(adj, mode="undirected")
+#g <- igraph::simplify(g) ## remove self loops
+# V(g)$color <- rainbow(G)[group[names(V(g))]] ## color nodes by group
+plot(g, vertex.label=NA)
+
+# run some neighbour detection
+km <- igraph::cluster_walktrap(g)
+## community membership
+com <- km$membership
+names(com) <- km$names
+table(com)
+
+```
+
+
+# Run simulations based on Randomly
+
+```{r}
+source_python("Process_Data.py")
+
+# create a list to store the dip values
+sol_projected_dips <- c()
+projected_eucl_dips <- c()
+projected_corr_dips <- c()
+sol_denoised_dips <- c()
+denoised_corr_dips <- c()
+denoised_eucl_dips <- c()
+
+# run simulations
+for(i in gene_seq){
+  print(i)
+  params.groups <- newSplatParams(batchCells = 2000, nGenes = 20000, seed = 1994)
+  # Generate simulated data
+  loc_vec <- c(1)
+  scale_vec <- rep(1)
+  sim <- splatSimulateGroups(params.groups, group.prob = prob_vec, de.facLoc = scale_vec,
+                             de.facScale = scale_vec, verbose = FALSE)
+  
+  # extract the counts
+  sim_counts <- as.data.frame(counts(sim))
+
+  # create a seurat object
+  obj <- CreateSeuratObject(raw.data = sim_counts, project = "Sim", minCells = 5, minGenes = 200)
+
+  #Preprocess the data
+  obj <- .PreProcess(obj, low_thres = c(200, -Inf, -Inf), high_thres = c(15000, 0.05, Inf))
+  obj <- ScaleData(obj,num.cores = 4)
+  
+  #data_df <- as.data.frame(as.matrix(obj@data))
+  res <- Process_Data(sim_counts)
+  
+  if(length(res) > 1){
+     # parse the results
+    projected_cells <- res[[1]]
+    denoised_data <- res[[2]]
+    
+    rownames(projected_cells) <- colnames(sim_counts)
+  
+    # compute the correlation
+    projected_corr <- (1 - WGCNA::cor(t(projected_cells)))/2
+  
+    # Compute the euclidean
+    projected_eucl <- parallelDist(projected_cells)
+  
+    # run MDH
+    #sol_projected <- mdh(as.data.frame(projected_cells))
+    #sol_projected_dist <- parallelDist(sol_projected$fitted)
+    
+    # compute correlations on denoised data
+    denoised_corr <- (1 - WGCNA::cor(t(denoised_data)))/2
+    
+    # compute euclidean distance of denoised data
+    denoised_eucl <- parallelDist(as.matrix(denoised_data))
+    
+    # do MDH projection on denoised data
+    sol_denoised <- mdh(denoised_data)
+    sol_denoised_dist <- parallelDist(sol_denoised$fitted)
+    
+    # compute the dip statistics
+    # Projected cells
+     #sol_projected_dips <- c(sol_projected_dips, dip.test(sol_projected_dist)$p.value)
+     projected_corr_dips <- c(projected_corr_dips, dip.test(projected_corr)$p.value)
+     projected_eucl_dips <- c(projected_eucl_dips, dip.test(projected_eucl)$p.value)
+  
+    # Denoised data
+    sol_denoised_dips <- c(sol_denoised_dips, dip.test(sol_denoised_dist)$p.value)
+    denoised_corr_dips <- c(denoised_corr_dips, dip.test(denoised_corr)$p.value)
+    denoised_eucl_dips <- c(denoised_eucl_dips, dip.test(denoised_eucl)$p.value)
+    
+    }
+   
+    else{
+      denoised_data <- res
+       # compute correlations on denoised data
+      denoised_corr <- (1 - WGCNA::cor(t(denoised_data)))/2
+      
+      # compute euclidean distance of denoised data
+      denoised_eucl <- parallelDist(as.matrix(denoised_data))
+      
+      # do MDH projection on denoised data
+      sol_denoised <- mdh(denoised_data)
+      sol_denoised_dist <- parallelDist(sol_denoised$fitted)
+      
+      sol_denoised_dips <- c(sol_denoised_dips, dip.test(sol_denoised_dist)$p.value)
+    denoised_corr_dips <- c(denoised_corr_dips, dip.test(denoised_corr)$p.value)
+    denoised_eucl_dips <- c(denoised_eucl_dips, dip.test(denoised_eucl)$p.value)
+    
+    
+      
+    }
+}
+
+
+if(length(projected_corr_dips) == length(gene_seq)){
+  result_table <- data.frame(gene_seq[1:150], sol_denoised_dips, denoised_eucl_dips, denoised_corr_dips,
+                            projected_corr_dips, projected_eucl_dips)
+  
+  colnames(result_table) <- c("numGenes", "mdh_denoised", "denoised_eucl", "denoised_corr", "projected_corr", "projected_eucl")
+}
+
+if(length(projected_corr_dips) < length(gene_seq)){
+  result_table <- data.frame(facScale_seq, sol_denoised_dips, denoised_eucl_dips, denoised_corr_dips)
+}
+
+   
+# write results to a csv
+write.csv(result_table, "Results/Randomly_Genes_Results_Table.csv")
+
+# plot the results
+results_melted <- melt(result_table, id.vars = "numGenes")
+
+pvals_plot <- ggplot2::ggplot(results_melted) + geom_point(aes(numGenes, value, color = variable)) +
+                                        xlab("Number of Genes") + ylab("P value") + theme_gray() +
+                                            ggtitle("Dip p value as a function of number of genes") +
+                                                  facet_grid(. ~ variable) +
+                                                     geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+
+  sim_norm <- scater::normalize(sim)
+  p <- scater::plotPCA(sim_norm) + ggtitle("Single Group PCA Plot")
+  rm(sim_norm)
+  gc()
+
+  # save  the pdfs
+  pdf("Results/Randomly_plots_3_groups_Genes.pdf", width = 14, height = 14)
+  plot(p)
+  pvals_plot
+  dev.off()
+```
+
+# Preprocess before running python
+```{r}
+dist_df <- as.vector(as.dist(1 -  WGCNA::cor(obj_sub))/2)
+```
+
+
+
+```{r}
+source_python("Modality_Tests.py")
+res <- hartigan_diptest(dist_df)
+res_cal_dip <- mpi.remote.exe(Calibrated_DipTest(dist_df, alpha=0.01, adaptive_resampling=TRUE, null='shoulder', N_non_adaptive=100))
+```
+
+# Simulations with SCRNA and SEURAT
+```{r}
+prob_vec <- c(1/2, 1/2)
+resid_corr_dips <- c()
+resid_eucl_dips <- c()
+glm_dips <- c()
+glm_mdh_dips <- c()
+glm_corr_dips <- c()
+seurat_corr_dips <- c()
+seurat_eucl_dips <- c()
+seurat_mdh_dips <- c()
+seurat_pca_dips <- c()
+swne_dips <- c()
+seq_vals <- seq(2, 10, 1)
+# write the results to a PDF
+#pdf("Results/Splatter_Results/Paths_scrna_5000_Cells.pdf")
+for(i in seq_vals){
+  print(i)
+  
+  params.groups <- newSplatParams(batchCells = 3000, nGenes = 1000, seed = 1994)
+  # Generate simulated data
+  #loc_vec <- c(1)
+  #scale_vec <- rep(1,2)
+  
+  # sim <- splatSimulateGroups(params.groups, group.prob = prob_vec, de.facLoc = scale_vec,
+                              # de.facScale = scale_vec, verbose = FALSE)
+  sim <- splatSimulatePaths(params.groups, path.length = i, de.prob = 0.5, de.facLoc = 0.5, verbose = FALSE)
+  
+  sim_norm <- scater::normalize(sim)
+  p <- plotPCA(sim_norm, colour_by = "Step")
+  plot(p)
+  # extract the counts
+  counts <- as.matrix(counts(sim))
+  
+  print("Now running SEURAT")
+  # seurat SEURAT
+  # compute dip on correlation
+  res_seurat <- .RunSeurat(counts, nGenes = 1000)
+  seurat_corr <- (1 - WGCNA::cor(res_seurat$obj_processed))/2
+  seurat_corr_dips <- c(seurat_corr_dips, dip.test(seurat_corr)$p.value)
+  
+  # compute dip on euclidean distance
+  seurat_eucl <- parallelDist(t(res_seurat$obj_processed))
+  seurat_eucl_dips <- c(seurat_eucl_dips, dip.test(seurat_eucl)$p.value)
+  
+  # compute dip on pc distance
+  seurat_pcs_dist <- parallelDist(res_seurat$pcs)
+  seurat_pca_dips <- c(seurat_pca_dips, dip.test(seurat_pcs_dist)$p.value)
+  
+  # compute dip on MDH
+  sol_seurat <- mdh(t(res_seurat$obj_processed))
+  sol_seurat_dist <- parallelDist(sol_seurat$fitted)
+  seurat_mdh_dips <- c(seurat_mdh_dips, dip.test(sol_seurat_dist)$p.value)
+  
+  print("Now running SWNE")
+  swne_embed <- swne::RunSWNE(as.matrix(res_seurat$obj_processed_norm), proj.method = "umap", dist.metric = "correlation", n.cores = 6)
+  swne_dist <- parallelDist(as.matrix(swne_embed$sample.coords))
+  swne_dip <- dip.test(swne_dist)$p.value
+  swne_dips <- c(swne_dips, swne_dip)
+  plot(swne_embed$sample.coords, main = "SWNE PCA Plot")
+  
+  print("Now running SCRNA")
+  # run SCRNA 
+  res <- .RunScrna(counts_data = counts, dim = 25, nGenes = 500)
+  
+  # compute the correlation between the residuals
+  res_cor <- (1 - WGCNA::cor(res$residuals))/2
+  res_cor_dip <- dip.test(res_cor)$p.value
+  #plot(density(res_cor), xlab = "Correlation", ylab = "Density", main = paste("Residual-Correlation Dip pval = ", round(res_cor_dip, 4)))
+  resid_corr_dips <- c(resid_corr_dips, res_cor_dip)
+  
+  # compute the euclidean distances between the residuals
+  res_eucl <- parallelDist(t(res$residuals))
+  res_eucl_dip <- dip.test(res_eucl)$p.value
+ # plot(density(res_eucl), xlab = "Distance", ylab = "Density", main = paste("Residual-Euclidean Dip pval = ", round(res_eucl_dip, 4)))
+  resid_eucl_dips <- c(resid_eucl_dips, res_eucl_dip)
+  
+  # run the dip test on the results
+  plot(res$pca_residuals$x[, 1:2], main = "SCRNA PCA Plot")
+  glm_dist <- parallelDist(as.matrix(res$pca_residuals$x[,1:2]))
+  glm_dip <- dip.test(glm_dist)$p.value
+  #plot(density(glm_dist), xlab = "Distance", ylab = "Density", main = paste("GLM-PCA Dip pval = ", round(glm_dip, 4)))
+  glm_dips <- c(glm_dips, glm_dip)
+  glm_corr <- (1 - WGCNA::cor(t(res$pca_residuals$x)))
+  glm_corr_dip <- dip.test(glm_corr)$p.value
+  glm_corr_dips <- c(glm_corr_dips, glm_corr_dip)
+  
+  # run MDH on the residuals
+  glm_mdh <- mdh(t(res$residuals), v0 = res$pca_residuals$rotation[, 1])
+  #plot(glm_mdh)
+  glm_mdh_dist <- parallelDist(glm_mdh$fitted)
+  glm_mdh_dip <- dip.test(glm_mdh_dist)$p.value
+  #plot(density(glm_mdh_dist), xlab = "Distance", ylab = "Density", main = paste("Residual-MDH Dip pval = ", round(glm_mdh_dip, 4)))
+  glm_mdh_dips <- c(glm_mdh_dips, glm_mdh_dip)
+  
+  rm(res, res_eucl, glm_dip, glm_mdh, glm_mdh_dist, sim, seurat_corr, seurat_eucl, sol_seurat, sol_seurat_dist, seurat_pcs_dist, res_seurat)
+  gc()
+}
+
+#  res_table <- data.frame(seq_vals[1:91], glm_dips[1:91], glm_mdh_dips[1:91], resid_corr_dips[1:91], resid_eucl_dips[1:91])
+#  colnames(res_table) <- c("nGenes","GLM_PCA", "Residual_MDH", "Residual_Corr", "Residual_Eucl")
+# #
+#  res_table_melted <- melt(res_table,id.vars = "nGenes")
+#  
+#  res_table_seurat <- data.frame(seq_vals[1:91], seurat_pca_dips[1:91], seurat_mdh_dips[1:91], seurat_corr_dips[1:91], seurat_eucl_dips[1:91])
+#  colnames(res_table_seurat) <- c("nGenes","SEURAT_PCA", "SEURAT_MDH", "SEURAT_Corr", "SEURAT_Eucl")
+#  res_table_seurat_melted <- melt(res_table_seurat,id.vars = "nGenes")
+# # 
+# p1 <- ggplot2::ggplot(res_table_melted) + geom_point(aes(nGenes, value, color = variable)) +
+#                                         xlab("Number of Genes") + ylab("P value") + theme_gray() +
+#                                             ggtitle("SCRNA Dip p value as a function of Number of Genes") +
+#                                                   facet_grid(. ~ variable) +
+#                                                      geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+# 
+# #
+# p2 <- ggplot2::ggplot(res_table_seurat_melted) + geom_point(aes(nGenes, value, color = variable)) +
+#                                         xlab("Number of Genes") + ylab("P value") + theme_gray() +
+#                                             ggtitle("SEURAT Dip p value as a function of Number of Genes") +
+#                                                   facet_grid(. ~ variable) +
+#                                                      geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+# pdf("Results/Splatter_Results/SEURAT_SCRNA_Genes_Consensus_Plots.pdf")
+# p3
+# p1
+# p2
+# dev.off()
+```
+
+
+
+```{r}
+params.groups <- newSplatParams(batchCells = 5000, nGenes = 2000, seed = 1994)
+sim <- splatSimulatePaths(params.groups, path.length = 5, de.prob = 0.5, de.facLoc = 0.5, verbose = FALSE)
+counts <- counts(sim)
+sim <- scater::normalize(sim)
+p3 <- plotPCA(sim, colour_by = "Step") + ggtitle("PCA plot of 5 steps")
+```
+
+
+# Principal Curves
+```{r}
+res <- .RunScrna(counts, dim = 2, nGenes = 500)
+res_projections <- res$pca_residuals$x
+
+```
+

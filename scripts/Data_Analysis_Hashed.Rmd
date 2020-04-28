@@ -1,0 +1,144 @@
+---
+title: "Data Analysis Hashed Cells"
+author: "Elijah Willie"
+date: "March 19, 2019"
+output: 
+  html_document:
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load in required libraries
+```{r}
+setwd("/home/elijah/Documents/Clusterability")
+rm(list = ls())
+library(Seurat)
+library(fastcluster)
+library(parallelDist)
+library(tidyverse)
+library(cluster)
+library(Rclusterpp)
+library(sigclust2)
+library(data.table)
+library(dendextend)
+library(corrplot)
+library(ape)
+library(parallel)
+library(agricolae)
+library(lubridate)
+library(factoextra)
+library(clustertend)
+library(Emcdf)
+library("diptest")
+library("silvermantest")
+library(Rtsne)
+#load helper functions
+source("Helper_Functions.R")
+#source("Consensus_Function.R")
+```
+
+# Preprocess the data
+```{r}
+#create the seurat object
+obj <- .CreateSeuratObj("Data/Hashed_cells_all.txt", Pname = "HASH", minCells = 5, minGenes = 200, matrix = F, sep = "\t")
+
+#Preprocess the data
+obj <- .PreProcess(obj, low_thres = c(200, -Inf), high_thres = c(2500, 0.05))
+
+#compute the number of variable genes
+length(obj@var.genes)
+```
+
+# Sort the highly variable by dispersion
+```{r}
+#get the variable genes sorted
+varGenes <- .SortGenes(obj)
+
+#get the data containing the top 500
+obj_sub <- .GetGeneData(obj, varGenes$gene)
+
+#do some garbage collection
+gc()
+```
+
+# Run the first test
+```{r}
+# Run the sigclust algorithm on all the variable genes followed by the dip test
+result <- .run_dip(nrow(varGenes), obj)
+
+#plot the result
+plot(result$plot)
+
+gc()
+```
+
+
+# Run the second test
+```{r}
+#create a sequence of numbers
+seq_vals <- seq(50,350, by = 50)
+
+#iterate over sequence values and run program
+results <- NULL
+for(val in seq_vals){
+  result <- .run_dip(val, obj)
+  #plot the result
+  plot(result$plot)
+  results[[val/50]] = result
+  gc()
+}
+
+
+#remove null values from the results
+results <- Filter(Negate(is.null), results)
+```
+
+# Run the third test
+```{r}
+boot_pvals <- NULL
+dist_list <- NULL
+dip_results <- NULL
+seq_vals <- seq(50,350, by = 50)
+for(i in seq_vals){
+  print(i)
+  #permute the data
+  permuted <- .GetGeneData(obj,varGenes$gene[1:i])
+    #GF_sub[sample(nrow(GF_sub), , replace=TRUE),]
+
+  #compute the distance
+  data_dist <- parallelDist(t(permuted))
+  dist_list[[i/50]] <- data_dist
+  gc()
+  #compute the dip stat
+  boot_pvals[[i/50]] <- dip.test(data_dist)$p.value
+  dip_results[[i/50]] <- dip(data_dist, full.result = T)
+  gc()
+}
+
+#print the results
+boot_pvals
+```
+
+# Run the 4th test
+```{r}
+#run consensus clustering
+output <- .Boot_Con(t(obj_sub), obj, distance="euclidean", method="ward",nboot=100)
+
+#extract the dendrogram
+dend <- as.dendrogram(output$dendrogram)
+
+#plot it
+plot(dend, type = "rectangle", ylab = "Height", edgePar = list(col = 2:3, lwd = 2:1))
+
+#compute the cluster assignments
+assignments <- cutree(dend, 2)
+
+#run the significance testing 
+Sig_Res <- sigclust(t(obj_sub), labels = assignments)
+
+#print the p value
+Sig_Res$p_norm
+```
