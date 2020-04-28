@@ -1,0 +1,59 @@
+---
+title: "GLM PCA Tests"
+author: "Elijah Willie"
+date: "May 14, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(data.table)
+library(PPCI)
+library(Seurat)
+library(diptest)
+library(tidyverse)
+library(parallelDist)
+```
+
+# Read in the data and compute the most informative genes
+```{r}
+data <-fread("~/Documents/Clusterability/Data/spf_noCC_noNKT.txt") %>% column_to_rownames(var = "V1") %>% as.matrix()
+
+# compute the most informative genes
+genes_info <- compute_gene_info(data, mod = "multinomial")
+sig_genes <- which(genes_info$pval < 0.05)
+genes_info <- genes_info[sig_genes, ]
+
+# get the counts for the most informative genes
+data_new <- data[sig_genes, ]
+```
+
+# Run GLM PCA on the raw counts
+```{r}
+data_new <- rm_zero_rowcol(data_new)
+data_glm <- glmpca(data_new, 2, fam = "mult")
+```
+
+# Plot the results
+```{r}
+ggplot(data = data_glm, aes(x = dim1, y = dim2)) + geom_point()
+```
+
+# Run some statistical tests on the results
+```{r}
+# compute the distance between the points 
+glm_dist <- parallelDist(as.matrix(data_glm))
+
+# run the dip test
+dip.test(glm_dist)
+```
+
+# Lets do some projection using GLM PCA as initial projection vectors
+```{r}
+#loadings <- as.matrix(data_glm$loadings)
+sol <- mdh(t(data_new))
+```
+

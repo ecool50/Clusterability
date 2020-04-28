@@ -1,0 +1,142 @@
+---
+title: "Randomly"
+author: "Elijah Willie"
+date: "23/02/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+gc()
+options(warn=-1)
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(reticulate)
+  library(splatter)
+  library(SingleCellExperiment)
+  library(ggplot2)
+  library(dplyr)
+  library(clue)
+  library(pcaReduce)
+  library(parallelDist)
+  library(data.table)
+  library(multiview)
+  library(cowplot)
+  library(diptest)
+  library(pheatmap)
+  library(ggplotify)
+  library(tidyverse)
+  library(agricolae)
+  library(aricode)
+  library(Matrix)
+  library(Rcpp)
+  library(DuoClustering2018)
+  library(ggrepel)
+  library(splatter)
+  # library(Rfast)
+  }
+)
+# source required functions
+setwd("~/Documents/Clusterability/scripts/")
+source("Helper_Functions.R")
+source("~/Documents/scrna2019-master/algs/glmpca.R")
+source("~/Documents/scrna2019-master/util/functions.R")
+source("~/Documents/scrna2019-master/util/functions_genefilter.R")
+source("Pipeline_Functions.R")
+source("Clustering_Functions.R")
+source("func.R")
+source("Dip_Functions.R")
+source("consensus_funcs.R")
+source("Plot_Funcs.R")
+source("cpca_mod.R")
+source("cpc_eigen.R")
+source("Kernel_Functions.R")
+source("run_CIDR.R")
+source("~/Documents/Spectrum/R/core_functions.R")
+source("~/Documents/Spectrum/R/kernel_functions.R")
+source("~/Documents/Spectrum/R/plotting_functions.R")
+source("~/Documents/Spectrum/R/spectrum.R")
+source("run_Ascend.R")
+source("run_CIDR.R")
+source("run_Monocle.R")
+source("run_pcaReduce.R")
+# source("run_RaceID3.R")
+source("run_Sincell.R")
+source("run_sscClust.R")
+source("run_TSCAN.R")
+source("run_SC3.R")
+source("run_Seurat.R")
+source("run_SIMLR.R")
+# sourceCpp("test.cpp")
+# source("RaceID2_StemID_class.R")
+# use_virtualenv("r-reticulate")
+# use_python("/usr/bin/python3.7")
+source_python("Process_Data.py")
+
+```
+
+# Gold Standard
+```{r}
+load("../Datasets/Sce_CellRanger.RData")
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$Truth))
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "Truth") + theme_grey() + ggtitle("Fretag et al Gold Standard PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+data <- as.data.frame(SingleCellExperiment::counts(sce))
+
+res <- Process_Data(t(data))
+
+projected_cells <- res[[1]]
+denoised_data <- res[[2]]
+
+rownames(denoised_data) <- colnames(data)
+```
+
+# Silver 1
+```{r}
+load("../Datasets/Sce_Dataset1.RData")
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$Truth))
+
+
+
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "Truth") + theme_grey() + ggtitle("Freytag et al Silver 1 PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+data <- as.data.frame(SingleCellExperiment::counts(sce))
+
+res <- Process_Data(t(data))
+
+projected_cells <- res[[1]]
+denoised_data <- res[[2]]
+
+rownames(denoised_data) <- colnames(data)
+
+expr <- as.data.frame(t(obj@Seurat$Scaled.Data))
+res <- vasc(expr)
+
+```
+
+# Segerstolpe
+```{r}
+sce <- readRDS("../Data/Hard_Datasets/segerstolpe.rds")
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Segerstolpe et al PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$cell_type1))
+
+data <- as.data.frame(SingleCellExperiment::counts(sce))
+
+res <- Process_Data(t(data))
+
+projected_cells <- res[[1]]
+denoised_data <- res[[2]]
+
+rownames(denoised_data) <- colnames(data)
+```
+

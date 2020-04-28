@@ -1,0 +1,2661 @@
+---
+title: "Pipeline Real Data"
+author: "Elijah Willie"
+date: "24/07/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load required librares
+```{r}
+rm(list = ls())
+gc()
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(reticulate)
+  library(splatter)
+  library(SingleCellExperiment)
+  library(ggplot2)
+  library(dplyr)
+  library(clue)
+  library(pcaReduce)
+  library(parallelDist)
+  library(data.table)
+  }
+)
+# source required functions
+setwd("/home/elijah/Documents/Clusterability/scripts")
+source("Helper_Functions.R")
+source("/home/elijah/Documents/scrna2019/algs/glmpca.R")
+source("/home/elijah/Documents/scrna2019/util/functions.R")
+source("/home/elijah/Documents/scrna2019/util/functions_genefilter.R")
+source("Pipeline_Functions.R")
+source("func.R")
+# source("RaceID2_StemID_class.R")
+use_virtualenv("r-reticulate")
+use_python("/usr/local/bin/python3")
+```
+
+# Ctro
+```{r}
+# get the counts data
+counts <- fread("Data/Citro_hash_noCycle_noMyeloid.txt") %>% column_to_rownames(var = "V1")
+# run the pipeline
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# sc3 analysis
+sc3_sce <- SingleCellExperiment(
+    assays = list(counts = obj@Data$cleaned)
+)
+sc3_sce <- scater::normalize(sc3_sce)
+
+sc3_sce <- sc3_estimate_k(sc3_sce)@metadata$sc3$k_estimation
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+colnames(res.table) <- c("Seurat", "Scrna")
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+  seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H"))
+                                           
+```
+
+
+# SPF NO CC NO NKT
+```{r}
+# get the counts data
+counts <- fread("Data/spf_noCC_noNKT.txt") %>% column_to_rownames(var = "V1")
+# run the pipeline
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# sc3 analysis
+sc3_sce <- SingleCellExperiment(
+    assays = list(counts = obj@Data$cleaned)
+)
+sc3_sce <- scater::normalize(sc3_sce)
+
+sc3_sce <- sc3_estimate_k(sc3_sce)@metadata$sc3$k_estimation
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+colnames(res.table) <- c("Seurat", "Scrna")
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+
+# combine the plots
+plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H"))
+
+```
+
+
+# SPF ALL T-CELLS
+```{r}
+# get the counts data
+counts <- fread("Data/SPF_allTcells.txt") %>% column_to_rownames(var = "V1")
+# run the pipeline
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# sc3 analysis
+sc3_sce <- SingleCellExperiment(
+    assays = list(counts = obj@Data$cleaned)
+)
+sc3_sce <- scater::normalize(sc3_sce)
+
+sc3_sce <- sc3_estimate_k(sc3_sce)@metadata$sc3$k_estimation
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+colnames(res.table) <- c("Seurat", "Scrna")
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H"))
+
+```
+
+
+```{r}
+pdf("Results/Pipeline/Real_Data/Plots.pdf")
+plot(p)
+plot(p1)
+plot(p2)
+plot(p3)
+plot(p4)
+plot(p5)
+dev.off()
+
+```
+
+# MANNO
+```{r}
+# get the counts data
+sce <- readRDS("../Data/Benchmarks/Mouse/Brain/manno_mouse.rds")
+counts <- counts(readRDS("../Data/Benchmarks/Mouse/Brain/manno_mouse.rds"))
+# run the pipeline
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+colnames(res.table) <- c("Seurat", "Scrna")
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H"))
+```
+ 
+# MARQUES
+```{r}
+# get the counts data
+counts <- counts(readRDS("Data/Benchmarks/Mouse/Brain/marques.rds"))
+# run the pipeline
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+
+p.marques.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+marques.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.marques.seurat.tsne <-  ggplot(marques.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+marques.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.marques.seurat.umap <- ggplot(marques.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.marques.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+marques.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+marques.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.marques.seurat <- ggplot(marques.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.marques.scrna <- ggplot(marques.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+marques.plots <- plot_grid(p.marques.pca, p.marques.seurat.tsne, p.marques.seurat.umap, p.marques.seurat, p.marques.scrna, p.marques.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+pdf("Results/Pipeline/Real_Data/Marques_Plots_1500.pdf", width = 10, height = 10)
+plot(marques.plots)
+dev.off()
+```
+
+
+# ROMANOV
+```{r}
+# get the counts data
+sce <- readRDS("../Data/Benchmarks/Mouse/Brain/romanov.rds")
+counts <- counts(sce)
+# run the pipeline
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+
+# PCA plots
+p.romanov.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+romanov.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.romanov.seurat.tsne <-  ggplot(romanov.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+romanov.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.romanov.seurat.umap <- ggplot(romanov.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.romanov.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+romanov.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+romanov.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.romanov.seurat <- ggplot(romanov.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.romanov.scrna <- ggplot(romanov.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+romanov.plots <- plot_grid(p.romanov.pca, p.romanov.seurat.tsne, p.romanov.seurat.umap, p.romanov.seurat, p.romanov.scrna, p.romanov.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+pdf("Results/Pipeline/Real_Data/Romanov_Plots_1000.pdf", height = 10, width = 10)
+plot(romanov.plots)
+dev.off()
+```
+
+
+# ZEISEL
+```{r}
+# get the counts data
+counts <- counts(readRDS("Data/Benchmarks/Mouse/Brain/zeisel.rds"))
+# run the pipeline
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# sc3 analysis
+sc3_sce <- SingleCellExperiment(
+    assays = list(counts = obj@Data$cleaned)
+)
+sc3_sce <- scater::normalize(sc3_sce)
+
+sc3_sce <- sc3_estimate_k(sc3_sce)@metadata$sc3$k_estimation
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+# PCA plots
+p.zeisel.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+zeisel.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.zeisel.seurat.tsne <-  ggplot(zeisel.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+zeisel.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.zeisel.seurat.umap <- ggplot(zeisel.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.zeisel.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+zeisel.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+zeisel.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.zeisel.seurat <- ggplot(zeisel.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.zeisel.scrna <- ggplot(zeisel.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+zeisel.plots <- plot_grid(p.zeisel.pca, p.zeisel.seurat.tsne, p.zeisel.seurat.umap, p.zeisel.seurat, p.zeisel.scrna, p.zeisel.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+# save the pdfs
+pdf("Results/Pipeline/Real_Data/Zeisel_Plots_1500.pdf",height = 10, width = 10)
+plot(zeisel.plots)
+dev.off()
+```
+
+# CHEN
+```{r}
+# get the counts data
+counts <- counts(readRDS("Data/Benchmarks/Mouse/Brain/chen.rds"))
+# run the pipeline
+obj <- CreateModalityObject(counts)
+rm(counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+# PCA plots
+p.chen.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+chen.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.chen.seurat.tsne <-  ggplot(chen.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+chen.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.chen.seurat.umap <- ggplot(chen.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.chen.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+chen.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+chen.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.chen.seurat <- ggplot(chen.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.chen.scrna <- ggplot(chen.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+chen.plots <- plot_grid(p.chen.pca, p.chen.seurat.tsne, p.chen.seurat.umap, p.chen.seurat, p.chen.scrna, p.chen.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+# save the pdfs
+  pdf("Results/Pipeline/Real_Data/Chen_Plots_1500.pdf",width = 10, height = 10)
+  plot(chen.plots)
+  dev.off()
+```
+
+
+
+```{r}
+dat <- as.data.frame(t(counts))
+```
+
+```{python}
+import randomly
+import pandas as pd
+import numpy as np
+
+# initialize the model
+model = randomly.Rm()
+
+model.preprocess(r.dat, min_tp=0, 
+                        min_genes_per_cell=5, 
+                        min_cells_per_gene=200,
+                    refined=True)
+model.refining()
+
+# fit the model
+model.fit()
+
+
+Denoised_Data = pd.DataFrame(model.return_cleaned(fdr=0.05))
+
+```
+
+```{r}
+res <-obj@Seurat$Scaled.Data
+# estimate number of significant PCs
+num_sig_pcs <- SigPCs(as.matrix(res), ndf = min(nrow(res), ncol(res)))
+cat(paste("\nThe number of significant PCs are: ", num_sig_pcs))
+if(num_sig_pcs < 10){
+  cat("\nNumber of significant PCs is less than 10, returning the top 10 PCs")
+  obj_PCA <- prcomp_irlba(res, 10, retx = T, center = F, scale. = F, fastpath = T)
+}
+if(num_sig_pcs >= 10){
+  cat("\nNumber of significant PCs is greater than PCs specified, returning the number of PCs specified")
+  obj_PCA <- prcomp_irlba(res, num_sig_pcs, retx = T, center = F, scale. = F, fastpath = T)
+}
+
+obj_mdh <- mdh(res)
+```
+
+# run it on real data with no clusters
+
+## load in the preprocessed data
+```{r}
+pbmc <- readRDS(file = "../Data/Benchmarks/pbmc3k_final.rds")
+
+p.pbmc.umap <- DimPlot(pbmc, reduction = "umap") + ggtitle("PBMC Clusters")  + 
+                                                                    theme_grey() +  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+## Extract the Naive CD4 T cells and analyze them
+```{r}
+# select Naive CD4 T cells
+Naive_counts <- as.matrix(GetAssayData(pbmc, slot = "counts")[, WhichCells(pbmc, ident = "Naive CD4 T")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(Naive_counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+
+# plot heat map
+  obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+  heatmap <- as.ggplot(obj.heatmap)
+  
+  seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+c1.plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G"))
+```
+
+## Extract the B cells and analyze them
+```{r}
+# select Naive CD4 T cells
+B_counts <- as.matrix(GetAssayData(pbmc, slot = "counts")[, WhichCells(pbmc, ident = "B")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(B_counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+
+
+# plot heat map
+  obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+  heatmap <- as.ggplot(obj.heatmap)
+  
+  seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+c2.plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G"))
+```
+
+
+## Extract the CD14+ Mono  cells and analyze them
+```{r}
+# select Naive CD4 T cells
+Mono_counts <- as.matrix(GetAssayData(pbmc, slot = "counts")[, WhichCells(pbmc, ident = "CD14+ Mono")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(Mono_counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# sc3 analysis
+# sc3_sce <- SingleCellExperiment(
+#     assays = list(counts = obj@Data$cleaned)
+# )
+# sc3_sce <- scater::normalize(sc3_sce)
+# 
+# sc3_sce <- sc3_estimate_k(sc3_sce)@metadata$sc3$k_estimation
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+
+
+# plot heat map
+  obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+  heatmap <- as.ggplot(obj.heatmap)
+  
+  seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+c3.plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G"))
+```
+
+
+## Extract the Naive CD4 T, Memory CD4 T, CD8 T, and NK cells
+```{r}
+# select Naive CD4 T cells
+combined_counts <- as.matrix(GetAssayData(pbmc, slot = "counts")[, WhichCells(pbmc, ident = c("Naive CD4 T","Memory CD4 T","NK" ))])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(combined_counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+
+
+# plot heat map
+  obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+  heatmap <- as.ggplot(obj.heatmap)
+  
+  seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+c123.plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G"))
+```
+
+
+## Combine all the cell types and run it through the pipeline
+```{r}
+# select Naive CD4 T cells
+all_counts <- as.matrix(GetAssayData(pbmc, slot = "counts"))
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(all_counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna")
+
+res_table <- cbind(scrna, seurat)
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna")
+
+res.table <- cbind(scrna, seurat)
+
+
+# plot heat map
+  obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+  heatmap <- as.ggplot(obj.heatmap)
+  
+  seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+call.plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G"))
+```
+
+## Save the plots
+```{r}
+pdf("Results/Pipeline/Real_Data/PBMC_Plots.pdf")
+plot(p.pbmc.umap)
+plot(t.naive)
+plot(t.b)
+plot(t.mono)
+plot(t.combined)
+plot(t.all)
+dev.off()
+```
+
+# Perform the same experiment on Shekar et al
+```{r}
+shekar <- mcreadRDS("Data/Benchmarks/Mouse/Retina/shekar_seurat.rds")
+
+```
+
+## Muller cells
+```{r}
+# extract the biloar cells
+muller_counts <- as.matrix(GetAssayData(shekar, slot = "counts")[, WhichCells(shekar, idents = "muller")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(muller_counts)
+
+rm(muller_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+pca.muller <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("Muller Cells PCA plot") + theme_grey() +    theme(plot.title = element_text(hjust = 0.5))
+muller.tests <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("Muller Cells significance proportions") + theme_grey() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+muller.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+muller.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.muller.seurat <- ggplot(muller.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.muller.scrna <- ggplot(muller.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+t.muller <- plot_grid(pca.muller, muller.tests, p.muller.seurat, p.muller.scrna, labels = c("A", "B", "C", "D"))
+
+```
+
+
+```{r}
+# extract the biloar cells
+amacrine_counts <- as.matrix(GetAssayData(shekar, slot = "counts")[, WhichCells(shekar, idents = "amacrine")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(amacrine_counts)
+
+rm(amacrine_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+pca.amacrine <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("Unknown Cells PCA plot") + theme_grey() +    theme(plot.title = element_text(hjust = 0.5))
+amacrine.tests <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("Unknown Cells significance proportions") + theme_grey() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+amacrine.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+amacrine.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.amacrine.seurat <- ggplot(amacrine.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.amacrine.scrna <- ggplot(amacrine.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+t.amacrine <- plot_grid(pca.amacrine, amacrine.tests, p.amacrine.seurat, p.amacrine.scrna, labels = c("A", "B", "C", "D"))
+
+```
+
+```{r}
+# extract the biloar cells
+unknown_counts <- as.matrix(GetAssayData(shekar, slot = "counts")[, WhichCells(shekar, idents = "unknown")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(unknown_counts)
+
+rm(unknown_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+pca.unknown <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("Amacrine Cells PCA plot") + theme_grey() +    theme(plot.title = element_text(hjust = 0.5))
+unknown.tests <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("Amacrine Cells significance proportions") + theme_grey() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+unknown.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+unknown.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.unknown.seurat <- ggplot(unknown.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.unknown.scrna <- ggplot(unknown.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+t.unknown <- plot_grid(pca.unknown, unknown.tests, p.unknown.seurat, p.unknown.scrna, labels = c("A", "B", "C", "D"))
+
+```
+
+
+```{r}
+# extract the biloar cells
+bipolar_counts <- as.matrix(GetAssayData(shekar, slot = "counts")[, WhichCells(shekar, idents = "bipolar")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(bipolar_counts)
+
+rm(bipolar_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# sc3 analysis
+sc3_sce <- SingleCellExperiment(
+    assays = list(counts = obj@Data$cleaned)
+)
+sc3_sce <- scater::normalize(sc3_sce)
+
+sc3_sce <- sc3_estimate_k(sc3_sce)@metadata$sc3$k_estimation
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+pca_unknown <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("bipolar Cells PCA plot")
+unknown_tests <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("bipolar Cells significance proportions")
+
+```
+
+
+
+
+
+# PBMC 8K CELLS
+```{r}
+# read in the dataset
+dat <- mcreadRDS("Data/Benchmarks/Sce_Dataset5.rds")
+
+# get the counts
+dat_counts <- counts(dat)
+
+rm(dat)
+gc()
+# read in the clusters
+dat_clust <- fread("Data/Benchmarks/analysis/clustering/kmeans_3_clusters/clusters.csv") %>% column_to_rownames(var = "Barcode")
+```
+
+```{r}
+# create the seurat object 
+PBMC_8K <- CreateSeuratObject(dat_counts, project = "Proj", min.cells = 5, min.features = 200, meta.data = dat_clust)
+Idents(PBMC_8K) <- "Cluster"
+rm(dat_counts)
+gc()
+```
+
+
+##  Run on the first cluster
+```{r}
+# extract the counts
+c1_counts <- as.matrix(GetAssayData(PBMC_8K, slot = "counts")[, WhichCells(PBMC_8K, idents = "1")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(dat_counts)
+
+rm(c1_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+# PCA plots
+p.c1.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("C1 PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+c1.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.c1.seurat.tsne <-  ggplot(c1.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "C1 Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+c1.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.c1.seurat.umap <- ggplot(c1.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "C1 UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.c1.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("C1 Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+c1.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+c1.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.c1.seurat <- ggplot(c1.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C1 Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.c1.scrna <- ggplot(c1.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C1 Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+c1.plots <- plot_grid(p.c1.pca, p.c1.seurat.tsne, p.c1.seurat.umap, p.c1.seurat, p.c1.scrna, p.c1.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+
+```
+
+
+## Run on the second cluster
+```{r}
+# extract the counts
+c2_counts <- as.matrix(GetAssayData(PBMC_8K, slot = "counts")[, WhichCells(PBMC_8K, idents = "2")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(c2_counts)
+
+rm(c2_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+# PCA plots
+p.c2.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("C2 PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+c2.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.c2.seurat.tsne <-  ggplot(c2.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "C2 Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+c2.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.c2.seurat.umap <- ggplot(c2.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "C2 UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.c2.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("C2 Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+c2.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+c2.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.c2.seurat <- ggplot(c2.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C2 Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.c2.scrna <- ggplot(c2.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C2 Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+c2.plots <- plot_grid(p.c2.pca, p.c2.seurat.tsne, p.c2.seurat.umap, p.c2.seurat, p.c2.scrna, p.c2.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+```
+
+## Run on the third cluster
+```{r}
+# extract the counts
+c3_counts <- as.matrix(GetAssayData(PBMC_8K, slot = "counts")[, WhichCells(PBMC_8K, idents = "3")])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(c3_counts)
+
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+# PCA plots
+p.c3.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("C3 PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+c3.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.c3.seurat.tsne <-  ggplot(c3.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "C3 Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+c3.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.c3.seurat.umap <- ggplot(c3.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "C3 UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.c3.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("C3 Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+c3.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+c3.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.c3.seurat <- ggplot(c3.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C3 Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.c3.scrna <- ggplot(c3.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C3 Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+c3.plots <- plot_grid(p.c3.pca, p.c3.seurat.tsne, p.c3.seurat.umap, p.c3.seurat, p.c3.scrna, p.c3.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+```
+
+## combine cluster 1 and 2
+
+```{r}
+# extract the counts
+c12_counts <- as.matrix(GetAssayData(PBMC_8K, slot = "counts")[, WhichCells(PBMC_8K, idents = c("1","2"))])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(c12_counts)
+
+rm(c12_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+# PCA plots
+p.c12.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("C1 and C2 PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+c12.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.c12.seurat.tsne <-  ggplot(c12.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "C1 and C2 Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+c12.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.c12.seurat.umap <- ggplot(c12.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "C1 and C2 UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.c12.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("C1 and C2 Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+c12.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+c12.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.c12.seurat <- ggplot(c12.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C1 and C2 Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.c12.scrna <- ggplot(c12.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C1 and C2 Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+c12.plots <- plot_grid(p.c12.pca, p.c12.seurat.tsne, p.c12.seurat.umap, p.c12.seurat, p.c12.scrna, p.c12.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+```
+
+## Run on all three Clusters
+```{r}
+# extract the counts
+all_counts <- as.matrix(GetAssayData(PBMC_8K, slot = "counts")[, WhichCells(PBMC_8K, idents = c("1","2","3"))])
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(all_counts)
+
+rm(all_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+colnames(res.table) <- c("Seurat", "Scrna")
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H"))
+```
+
+## Save the plots
+```{r}
+pdf("Results/Pipeline/Real_Data/PBMC_8K_plots_1500.pdf", width = 10, height = 10)
+plot(c1.plots)
+plot(c2.plots)
+plot(c3.plots)
+plot(c12.plots)
+plot(All.plots)
+dev.off()
+```
+
+
+# PBMC CD19+ Cells
+## Read in the data matrix
+```{r}
+data_dir <- "Data/Benchmarks/CD19_B_Cells/matrices_mex/hg19/"
+list.files(data_dir) # Should show barcodes.tsv, genes.tsv, and matrix.mtx
+expression_matrix <- Read10X(data.dir = data_dir)
+dat_clust <- fread("Data/Benchmarks/CD19_B_Cells/analysis_csv/kmeans/3_clusters/clusters.csv") %>% column_to_rownames(var = "Barcode")
+rownames(dat_clust) <- sub("-.*", "", rownames(dat_clust))
+PBMC_CD19 <- CreateSeuratObject(expression_matrix, project = "Proj", min.cells = 5, min.features = 200, meta.data = dat_clust)
+Idents(PBMC_CD19) <- "Cluster"
+```
+
+## Run on the first cluster
+```{r}
+# extract the counts
+c1_counts <- as.matrix(GetAssayData(PBMC_CD19, slot = "counts")[, WhichCells(PBMC_CD19, idents = "1")])
+
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(c1_counts)
+
+rm(c1_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+# PCA plots
+p.c1.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("C1 PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+c1.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.c1.seurat.tsne <-  ggplot(c1.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "C1 Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+c1.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.c1.seurat.umap <- ggplot(c1.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "C1 UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.c1.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("C1 Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+c1.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+c1.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.c1.seurat <- ggplot(c1.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C1 Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.c1.scrna <- ggplot(c1.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C1 Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+c1.plots <- plot_grid(p.c1.pca, p.c1.seurat.tsne, p.c1.seurat.umap, p.c1.seurat, p.c1.scrna, p.c1.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+
+```
+
+
+## Run on the second cluster
+```{r}
+# extract the counts
+c2_counts <- as.matrix(GetAssayData(PBMC_CD19, slot = "counts")[, WhichCells(PBMC_CD19, idents = "2")])
+
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(c2_counts)
+
+rm(c2_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res_table <- cbind(scrna, seurat)
+
+# compute the proportions of passed test
+obj <- ComputeProportions(obj)
+
+# plot the results
+t1 <- as.data.frame(unlist(obj@Tests$Seurat$Proportions))
+colnames(t1) <- c("Proportion")
+t2 <- as.data.frame(unlist(obj@Tests$Scrna$Proportions))
+colnames(t2) <- c("Proportion")
+t3 <- rbind(t1, t2)
+t3$Type <- as.factor(rownames(t3))
+
+# get the seurat pca dataframe
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+p.c2.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle("C2 PCA plot") + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+c2.seurat.tsne <- as.data.frame(Rtsne(obj@Seurat$Sig.PCs.Data, perplexity=30, verbose=TRUE, max_iter = 500, pca = F, normalize = F)$Y)
+p.c2.seurat.tsne <-  ggplot(c2.seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = "C2 Tsne Plot", x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+c2.seurat.umap <- as.data.frame(umap(obj@Seurat$Sig.PCs.Data, method = "umap-learn")$layout)
+p.c2.seurat.umap <- ggplot(c2.seurat.umap) + geom_point(aes(V1, V2)) + labs(title = "C2 UMAP Plot", x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# Plot the significance proportions
+p.c2.sig.prop <- ggplot(t3) + geom_point(aes(Type, Proportion))  +
+                                        xlab("Method") + ylab("Proportion") +  ggtitle("C2 Significance Proportions") + theme_grey()+
+                            theme(axis.text.x = element_text(angle = 90), plot.title = element_text(hjust = 0.5))
+
+# plot the projection densities
+c2.seurat.df <- as.data.frame(obj@Seurat$MDH$fitted)
+c2.scrna.df <- as.data.frame(obj@Scrna$MDH$fitted)
+p.c2.seurat <- ggplot(c2.seurat.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C2 Seurat MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.c2.scrna <- ggplot(c2.scrna.df) + geom_point(aes(v, V2), alpha = 0.5)  +
+                                        xlab("Plane 1") + ylab("Plane 2") +  ggtitle("C2 Scrna MDH") +
+                                              geom_density_2d(aes(v, V2), colour = "red", size = 1) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+
+c2.plots <- plot_grid(p.c2.pca, p.c2.seurat.tsne, p.c2.seurat.umap, p.c2.seurat, p.c2.scrna, p.c2.sig.prop, labels = c("A", "B","C", "D", "E", "F"))
+
+```
+
+## Run on full dataset
+
+```{r}
+# extract the counts
+All_counts <- as.matrix(GetAssayData(PBMC_CD19, slot = "counts")[, WhichCells(PBMC_CD19, idents = c("1","2"))])
+
+
+# run the pipeline on this. There should be no clusters
+obj <- CreateModalityObject(All_counts)
+
+rm(All_counts)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+colnames(res.table) <- c("Seurat", "Scrna")
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H"))
+
+```
+
+## Save the plots
+```{r}
+pdf("Results/Pipeline/Real_Data/PBMC_10K_plots_1500.pdf", width = 10, height = 10)
+plot(c1.plots)
+plot(c2.plots)
+plot(All.plots)
+dev.off()
+```
+
+
+# Duo Clustering Raw
+## KOH
+```{r}
+sce <- sce_full_Koh()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$LibraryName))
+
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 9, biology = F, gene_filter = F)
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+colnames(res.table) <- c("Seurat", "Scrna")
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H"))
+
+# compute adjusted randindex between clustering
+res.koh.clustering <- .ClusterDat(obj, sce, 9, true.clusters)
+res.koh.clustering <- t(as.data.frame(res.koh.clustering))
+colnames(res.koh.clustering) <- c("Koh")
+
+res.koh.clustering <- as.data.frame(res.koh.clustering)
+res.koh.clustering <- setDT(res.koh.clustering, keep.rownames = T)[]
+colnames(res.koh.clustering) <- c("Method", "AdjustedRandIndex")
+p.koh.bar <- res.koh.clustering %>% 
+  dplyr::mutate(Multiview = ifelse(Method == 'Multiview.Kmeans' | Method == 'Multiview.Hclust' | Method == 'Multiview.Pam' | Method == "Multiview.Hclust.Cor", T, F)) %>% 
+  ggplot(aes(Method, AdjustedRandIndex)) + geom_bar(stat="identity", aes(fill=Multiview)) + labs(title = "koh et al  Barplots") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+```
+
+## KUMAR
+```{r}
+sce <- sce_full_Kumar()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 3, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar.clustering <- .ClusterDat(obj, sce, 3, true.clusters)
+res.kumar.clustering <- t(as.data.frame(res.kumar.clustering))
+colnames(res.kumar.clustering) <- c("Kumar")
+```
+
+## Kumar 4 Easy
+```{r}
+sce <- sce_full_SimKumar4easy()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 4, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar4Easy.clustering <- .ClusterDat(obj, sce, 4, true.clusters)
+res.kumar4Easy.clustering <- t(as.data.frame(res.kumar4Easy.clustering))
+colnames(res.kumar4Easy.clustering) <- c("Kumar4Easy")
+```
+
+## Kumar 4 Hard
+```{r}
+sce <- sce_full_SimKumar4hard()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 4, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar4Hard.clustering <- .ClusterDat(obj, sce, 4, true.clusters)
+res.kumar4Hard.clustering <- t(as.data.frame(res.kumar4Hard.clustering))
+colnames(res.kumar4Hard.clustering) <- c("Kumar4Hard")
+```
+
+# Kumar 8 Hard
+```{r}
+sce <- sce_full_SimKumar8hard()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 8, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar8Hard.clustering <- .ClusterDat(obj, sce, 8, true.clusters)
+res.kumar8Hard.clustering <- t(as.data.frame(res.kumar8Hard.clustering))
+colnames(res.kumar8Hard.clustering) <- c("Kumar8Hard")
+```
+
+## Trapnell dataset
+```{r}
+sce <- DuoClustering2018::sce_full_Trapnell()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 3, biology = F, gene_filter = F)
+
+res.trapnell.clustering <- .ClusterDat(obj, sce, 3, true.clusters)
+res.trapnell.clustering <- t(as.data.frame(res.trapnell.clustering))
+colnames(res.trapnell.clustering) <- c("Trapnell")
+
+res.trapnell.clustering <- as.data.frame(res.trapnell.clustering)
+res.trapnell.clustering <- setDT(res.trapnell.clustering, keep.rownames = T)[]
+colnames(res.trapnell.clustering) <- c("Method", "AdjustedRandIndex")
+p.trapnell.bar <- res.trapnell.clustering %>% 
+  dplyr::mutate(Multiview = ifelse(Method == 'Multiview.Kmeans' | Method == 'Multiview.Hclust' | Method == 'Multiview.Pam' | Method == "Multiview.Hclust.Cor", T, F)) %>% 
+  ggplot(aes(Method, AdjustedRandIndex)) + geom_bar(stat="identity", aes(fill=Multiview)) + labs(title = "Trapnell et al  Barplots") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+```
+
+## generate pheatmap
+```{r}
+res.clustering.raw <- cbind(res.koh.clustering, res.kumar.clustering, res.kumar4Easy.clustering, res.kumar4Hard.clustering, res.kumar8Hard.clustering, res.trapnell.clustering)
+p.raw <- pheatmap(as.matrix(res.clustering.raw), cluster_cols = F, cluster_rows = F, main = paste("Duo et al Raw Heatmap"))
+p.raw <- ggplotify::as.ggplot(p.raw)
+
+# generate bar plot
+res.clustering.raw <- as.data.frame(res.clustering.raw)
+res.clustering.raw <- setDT(res.clustering.raw, keep.rownames = T)[]
+res.clustering.raw.melted <- melt(res.clustering.raw, id.vars = "rn")
+colnames(res.clustering.raw.melted) <- c("Method", "Dataset", "AdjustedRand")
+p.raw.bar <- temp %>% 
+  dplyr::mutate(Multiview = ifelse(Method == 'Multiview.Kmeans' | Method == 'Multiview.Hclust' , T, F)) %>% 
+  ggplot(aes(Method, AdjustedRandIndex)) + geom_bar(stat="identity", aes(fill=Multiview)) + labs(title = "Koh et al Barplots") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+```
+
+
+# Duo Clustering Filtered Expr10
+## KOH
+```{r}
+sce <- sce_filteredExpr10_Koh()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$LibraryName))
+
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 9, biology = F, gene_filter = F)
+
+# compute adjusted randindex between clustering
+res.koh.clustering <- .ClusterDat(obj, sce, 9, true.clusters)
+res.koh.clustering <- t(as.data.frame(res.koh.clustering))
+colnames(res.koh.clustering) <- c("Koh")
+
+res.koh.clustering <- as.data.frame(res.koh.clustering)
+res.koh.clustering <- setDT(res.koh.clustering, keep.rownames = T)[]
+colnames(res.koh.clustering) <- c("Method", "AdjustedRandIndex")
+p.koh.bar <- res.koh.clustering %>% 
+  dplyr::mutate(Multiview = ifelse(Method == 'Multiview.Kmeans' | Method == 'Multiview.Hclust' | Method == 'Multiview.Pam' | Method == "Multiview.Hclust.Cor", T, F)) %>% 
+  ggplot(aes(Method, AdjustedRandIndex)) + geom_bar(stat="identity", aes(fill=Multiview)) + labs(title = "koh et al  Barplots") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+```
+
+## KUMAR
+```{r}
+sce <- sce_filteredExpr10_Kumar()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 3, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar.clustering <- .ClusterDat(obj, sce, 3, true.clusters)
+res.kumar.clustering <- t(as.data.frame(res.kumar.clustering))
+colnames(res.kumar.clustering) <- c("Kumar")
+```
+
+## Kumar 4 Easy
+```{r}
+sce <- sce_filteredExpr10_SimKumar4easy()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 4, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar4Easy.clustering <- .ClusterDat(obj, sce, 4, true.clusters)
+res.kumar4Easy.clustering <- t(as.data.frame(res.kumar4Easy.clustering))
+colnames(res.kumar4Easy.clustering) <- c("Kumar4Easy")
+```
+
+## Kumar 4 Hard
+```{r}
+sce <- sce_filteredExpr10_SimKumar4hard()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 4, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar4Hard.clustering <- .ClusterDat(obj, sce, 4, true.clusters)
+res.kumar4Hard.clustering <- t(as.data.frame(res.kumar4Hard.clustering))
+colnames(res.kumar4Hard.clustering) <- c("Kumar4Hard")
+```
+
+# Kumar 8 Hard
+```{r}
+sce <- sce_filteredExpr10_SimKumar8hard()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 8, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar8Hard.clustering <- .ClusterDat(obj, sce, 8, true.clusters)
+res.kumar8Hard.clustering <- t(as.data.frame(res.kumar8Hard.clustering))
+colnames(res.kumar8Hard.clustering) <- c("Kumar8Hard")
+```
+
+## Trapnell dataset
+```{r}
+sce <- sce_filteredExpr10_Trapnell()
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 1000)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 3, biology = F, gene_filter = F)
+
+res.trapnell.clustering <- .ClusterDat(obj, sce, 3, true.clusters)
+res.trapnell.clustering <- t(as.data.frame(res.trapnell.clustering))
+colnames(res.trapnell.clustering) <- c("Trapnell")
+```
+
+## generate pheatmap
+```{r}
+res.clustering.expr10 <- cbind(res.koh.clustering, res.kumar.clustering, res.kumar4Easy.clustering, res.kumar4Hard.clustering, res.kumar8Hard.clustering, res.trapnell.clustering)
+p.expr10 <- pheatmap(as.matrix(res.clustering.expr10), cluster_cols = F, cluster_rows = F, main = paste("Duo et al EXPR10 Filtered Genes Heatmap"))
+p.expr10 <- ggplotify::as.ggplot(p.expr10)
+
+# generate box plot
+res.clustering.expr10 <- as.data.frame(res.clustering.expr10)
+res.clustering.expr10 <- setDT(res.clustering.expr10, keep.rownames = T)[]
+res.clustering.expr10.melted <- melt(res.clustering.expr10, id.vars = "rn")
+colnames(res.clustering.expr10.melted) <- c("Method", "Dataset", "AdjustedRand")
+p.expr10.bar <- res.clustering.expr10.melted %>% 
+  dplyr::mutate(Multiview = ifelse(Method == 'Multiview.Kmeans' | Method == 'Multiview.Hclust' , T, F)) %>% 
+  ggplot(aes(Method, AdjustedRand)) + geom_bar(stat="identity", aes(fill=Multiview)) + labs(title = "Duo et al EXPR10 Genes Barplots") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Dataset)
+```
+
+
+# Duo Clustering Filtered  HVG10
+## KOH
+```{r}
+sce <- sce_filteredHVG10_Koh()
+p.koh <- scater::plotPCA(sce, colour_by = "LibraryName") + theme_grey() + ggtitle("Koh PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) 
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$LibraryName))
+
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 9, biology = F, gene_filter = F)
+
+# compute adjusted randindex between clustering
+res.koh.clustering <- .ClusterDat(obj, sce, 9, true.clusters)
+res.koh.clustering <- t(as.data.frame(res.koh.clustering))
+colnames(res.koh.clustering) <- c("Koh")
+```
+
+## KUMAR
+```{r}
+sce <- sce_filteredHVG10_Kumar()
+p.kumar <- scater::plotPCA(sce, colour_by = "phenoid") + theme_grey() + ggtitle("Kumar PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 3, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar.clustering <- .ClusterDat(obj, sce, 3, true.clusters)
+res.kumar.clustering <- t(as.data.frame(res.kumar.clustering))
+colnames(res.kumar.clustering) <- c("Kumar")
+```
+
+## Kumar 4 Easy
+```{r}
+sce <- sce_filteredHVG10_SimKumar4easy()
+p.kumar4easy <- scater::plotPCA(sce, colour_by = "phenoid") + theme_grey() + ggtitle("Sim Kumar 4 Groups Easy PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 4, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar4Easy.clustering <- .ClusterDat(obj, sce, 4, true.clusters)
+res.kumar4Easy.clustering <- t(as.data.frame(res.kumar4Easy.clustering))
+colnames(res.kumar4Easy.clustering) <- c("Kumar4Easy")
+```
+
+## Kumar 4 Hard
+```{r}
+sce <- sce_filteredHVG10_SimKumar4hard()
+p.kumar4hard <- scater::plotPCA(sce, colour_by = "phenoid") + theme_grey() + ggtitle("Sim Kumar 4 Groups Hard PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 4, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar4Hard.clustering <- .ClusterDat(obj, sce, 4, true.clusters)
+res.kumar4Hard.clustering <- t(as.data.frame(res.kumar4Hard.clustering))
+colnames(res.kumar4Hard.clustering) <- c("Kumar4Hard")
+```
+
+# Kumar 8 Hard
+```{r}
+sce <- sce_filteredHVG10_SimKumar8hard()
+p.kumar8hard <- scater::plotPCA(sce, colour_by = "phenoid") + theme_grey() + ggtitle("Sim Kumar 8 Groups Hard PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 8, biology = F, gene_filter = F)
+
+# get the true clusters
+res.kumar8Hard.clustering <- .ClusterDat(obj, sce, 8, true.clusters)
+res.kumar8Hard.clustering <- t(as.data.frame(res.kumar8Hard.clustering))
+colnames(res.kumar8Hard.clustering) <- c("Kumar8Hard")
+```
+
+## Trapnell dataset
+```{r}
+sce <- sce_filteredHVG10_Trapnell()
+p.trapnell <- scater::plotPCA(sce, colour_by = "phenoid") + theme_grey() + ggtitle("Trapnell PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+meta.data <- colData(sce)
+true.clusters <- as.numeric(as.factor(meta.data$phenoid))
+counts <- counts(sce)
+
+obj <- CreateModalityObject(counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 1000)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 3, biology = F, gene_filter = F)
+
+res.trapnell.clustering <- .ClusterDat(obj, sce, 3, true.clusters)
+res.trapnell.clustering <- t(as.data.frame(res.trapnell.clustering))
+colnames(res.trapnell.clustering) <- c("Trapnell")
+```
+
+## generate pheatmap
+```{r}
+res.clustering.hvg10 <- cbind(res.koh.clustering, res.kumar.clustering, res.kumar4Easy.clustering, res.kumar4Hard.clustering, res.kumar8Hard.clustering, res.trapnell.clustering)
+p.hvg10 <- pheatmap(as.matrix(res.clustering.hvg10), cluster_cols = F, cluster_rows = F, main = paste("Duo et al Hvg10 Filtered Genes Heatmap"))
+p.hvg10 <- ggplotify::as.ggplot(p.hvg10)
+
+# generate box plot
+res.clustering.hvg10 <- as.data.frame(res.clustering.hvg10)
+res.clustering.hvg10 <- setDT(res.clustering.hvg10, keep.rownames = T)[]
+res.clustering.hvg10.melted <- melt(res.clustering.hvg10, id.vars = "rn")
+colnames(res.clustering.hvg10.melted) <- c("Method", "Dataset", "AdjustedRand")
+p.hvg10.bar <- res.clustering.hvg10.melted %>% 
+  dplyr::mutate(Multiview = ifelse(Method == 'Multiview.Kmeans' | Method == 'Multiview.Hclust' , T, F)) %>% 
+  ggplot(aes(Method, AdjustedRand)) + geom_bar(stat="identity", aes(fill=Multiview)) + labs(title = "Duo et al HVG10 Genes Barplots") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Dataset)
+```
+
+
+## Combine all the plots
+```{r}
+pca.plots <- plot_grid(p.koh, p.kumar, p.trapnell, labels = c("A", "B", "C"))
+pca.plots.sim <- plot_grid(p.kumar4easy, p.kumar4hard, p.kumar8hard, labels = c("A", "B", "C"))
+# heatmaps.plots <- plot_grid(p.raw, p.expr10, p.hvg10, p.m3drop, labels = c("A", "B", "C", "D"))
+bar.plots <- plot_grid(p.raw.bar, p.expr10.bar, p.hvg10.bar, labels = c("A", "B", "C", "D"))
+
+# save plots to pdf
+pdf("../Results/Pipeline/Paper_Plots/Cluster_Analysis_Plots_Scrna.pdf", height = 10, width = 12)
+plot(pca.plots)
+plot(pca.plots.sim)
+plot(p.raw.bar)
+plot(p.expr10.bar)
+plot(p.hvg10.bar)
+dev.off()
+```
+

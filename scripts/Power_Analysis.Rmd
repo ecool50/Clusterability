@@ -1,0 +1,339 @@
+---
+title: "Power Analysis"
+author: "Elijah Willie"
+date: "03/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+gc()
+options(warn=-1)
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(reticulate)
+  library(splatter)
+  library(SingleCellExperiment)
+  library(ggplot2)
+  library(dplyr)
+  library(clue)
+  library(pcaReduce)
+  library(parallelDist)
+  library(data.table)
+  library(multiview)
+  library(cowplot)
+  library(diptest)
+  library(pheatmap)
+  library(ggplotify)
+  library(tidyverse)
+  library(agricolae)
+  library(Matrix)
+  }
+)
+# source required functions
+setwd("~/Documents/Clusterability/scripts/")
+source("Helper_Functions.R")
+source("~/Documents/scrna2019-master/algs/glmpca.R")
+source("~/Documents/scrna2019-master/util/functions.R")
+source("~/Documents/scrna2019-master/util/functions_genefilter.R")
+source("Pipeline_Functions.R")
+source("Clustering_Functions.R")
+source("func.R")
+source("Dip_Functions.R")
+source("consensus_funcs.R")
+source("Plot_Funcs.R")
+source("cpca_mod.R")
+# source("RaceID2_StemID_class.R")
+use_virtualenv("r-reticulate")
+```
+
+# Simulate a single cluster with minimal cells
+
+```{r}
+# Seurat
+seurat.pc.cor <- rep(0,10)
+seurat.pc.eucl <- rep(0,10)
+seurat.umap.eucl <- rep(0,10)
+
+# Scrna
+scrna.pc.cor <- rep(0,10)
+scrna.pc.eucl <- rep(0,10)
+scrna.umap.eucl <- rep(0,10)
+
+# SCTransform
+sct.pc.cor <- rep(0,10)
+sct.pc.eucl <- rep(0,10)
+sct.umap.eucl <- rep(0,10)
+
+# consensus test
+con.vals <- rep(0,10)
+
+# store the plots
+myplots <- vector('list', 10)
+
+iter <- 1
+ncells <- seq(100, 1000, by = 100)
+
+
+for(i in ncells){
+  cat(paste("\nNOW RUNNING ITERATION", iter, "\n"))
+  
+  params.groups <- newSplatParams(batchCells = i, nGenes = 5000, seed = 1994)
+  sim <- splatSimulateGroups(params.groups, group.prob = c(1), de.facLoc = c(1)*0,
+                               de.facScale = c(1)*0, verbose = FALSE)
+  p <- plotPCA(scater::normalize(sim)) + ggtitle(paste(i, "Cells"))
+  myplots[[iter]] <- p
+  obj <- CreateModalityObject(counts(sim))
+  gc()
+  # add the seurat slot
+  obj <- PreprocessObject(obj,  nFeatures = 500)
+  gc()
+  # add the scrna slot
+  obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+  gc()
+  obj <- PreprocessObject(obj, method = "SCTransform", nFeatures = 500)
+  
+  # run modality test
+  obj <- TestModality(obj)
+  obj <- TestModality(obj, type = "Scrna")
+  obj <-TestModality(obj, type = "SCTransform")
+  
+  # run consensus test
+  obj <- .ConsensusTest(obj)
+  
+  # update the lists
+  # seurat
+  seurat.pc.cor[[iter]] <- obj@Tests$Seurat$Dip$PC$Pearson
+  seurat.pc.eucl[[iter]] <- obj@Tests$Seurat$Dip$PC$Euclidean
+  seurat.umap.eucl[[iter]] <- obj@Tests$Seurat$Dip$Umap$Euclidean
+  
+  # scrna
+  scrna.pc.cor[[iter]] <- obj@Tests$Scrna$Dip$PC$Pearson
+  scrna.pc.eucl[[iter]] <- obj@Tests$Scrna$Dip$PC$Euclidean
+  scrna.umap.eucl[[iter]] <- obj@Tests$Scrna$Dip$Umap$Euclidean
+  
+  # sct
+  sct.pc.cor[[iter]] <- obj@Tests$SCTransform$Dip$PC$Pearson
+  sct.pc.eucl[[iter]] <- obj@Tests$SCTransform$Dip$PC$Euclidean
+  sct.umap.eucl[[iter]] <- obj@Tests$SCTransform$Dip$Umap$Euclidean
+  
+  # update consensus
+  con.vals[[iter]] <- sum(obj@Tests$Multiview$Umap$nd_type == "sig")
+  
+  iter <- iter + 1
+  rm(obj)
+  gc()
+}
+
+# plot the results
+# Seurat
+seurat.table <- data.frame(ncells,seurat.pc.cor,seurat.pc.eucl,seurat.umap.eucl)
+colnames(seurat.table) <- c("NumCells", "PC.Cor", "PC.Eucl", "Umap.Eucl")
+seurat.table.melted <- data.table::melt(seurat.table, id.vars = "NumCells", variable.name = "Test")
+p.seurat <- ggplot2::ggplot(seurat.table.melted) + geom_point(aes(NumCells, value, color = Test)) +
+                                        xlab("Number of Cells") + ylab("P Value") + theme_gray() +
+                                             labs(title = "Seurat Significance") + 
+                                               theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+                                                  facet_grid(. ~ Test) +
+                                                    geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+
+# Scrna
+scrna.table <- data.frame(ncells,scrna.pc.cor,scrna.pc.eucl,scrna.umap.eucl)
+colnames(scrna.table) <- c("NumCells", "PC.Cor", "PC.Eucl", "Umap.Eucl")
+scrna.table.melted <- data.table::melt(scrna.table, id.vars = "NumCells", variable.name = "Test")
+p.scrna <- ggplot2::ggplot(scrna.table.melted) + geom_point(aes(NumCells, value, color = Test)) +
+                                        xlab("Number of Cells") + ylab("P Value") + theme_gray() +
+                                             labs(title = "Scrna Significance") + 
+                                               theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+                                                  facet_grid(. ~ Test) +
+                                                     geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+
+# SCTransform
+sct.table <- data.frame(ncells,sct.pc.cor,sct.pc.eucl,sct.umap.eucl)
+colnames(sct.table) <- c("NumCells", "PC.Cor", "PC.Eucl", "Umap.Eucl")
+sct.table.melted <- data.table::melt(sct.table, id.vars = "NumCells", variable.name = "Test")
+p.sct <- ggplot2::ggplot(sct.table.melted) + geom_point(aes(NumCells, value, color = Test)) +
+                                        xlab("Number of Cells") + ylab("P Value") + theme_gray() +
+                                             labs(title = "SCTransform Significance") + 
+                                               theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+                                                  facet_grid(. ~ Test) +
+                                                     geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+
+# Consensus test
+con.table <- data.frame(ncells, con.vals)
+colnames(con.table) <- c("NumCells", "Num.Clusters")
+p.con <- ggplot2::ggplot(con.table) + geom_point(aes(NumCells, Num.Clusters)) +
+                                        xlab("Number of Cells") + ylab("Number of Significant Nodes") + theme_gray() +
+                                             labs(title = "Consensus") + 
+                                               theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))  +
+                                                     geom_hline(yintercept=1, linetype="dashed", color = "red")
+
+# combine the plots
+p.final <- plot_grid(p.seurat, p.scrna, p.sct, p.con, labels = c("A","B","C","D"))
+
+```
+
+
+
+# Multiple clusters with minimal cells
+```{r}
+# Seurat
+seurat.pc.cor <- rep(0,10)
+seurat.pc.eucl <- rep(0,10)
+seurat.umap.eucl <- rep(0,10)
+
+# Scrna
+scrna.pc.cor <- rep(0,10)
+scrna.pc.eucl <- rep(0,10)
+scrna.umap.eucl <- rep(0,10)
+
+# SCTransform
+sct.pc.cor <- rep(0,10)
+sct.pc.eucl <- rep(0,10)
+sct.umap.eucl <- rep(0,10)
+
+# consensus test
+con.vals <- rep(0,10)
+
+# store the plots
+myplots <- vector('list', 10)
+params.groups <- newSplatParams(batchCells = 5000, nGenes = 5000, seed = 1994)
+
+iter <- 1
+props <- seq(0.1, 1, by = 0.1)
+
+for(i in props){
+  cat(paste("\nNOW RUNNING ITERATION", iter, "\n"))
+  sim <- splatSimulateGroups(params.groups, group.prob = c(1 - i, i), de.facLoc = c(1,1)*0.15,
+                               de.facScale = c(1,1)*0.15, verbose = FALSE)
+  p <- plotPCA(scater::normalize(sim), colour_by = "Group") + ggtitle(paste("Cluster Proportions", i, "and", 1-i))
+  myplots[[iter]] <- p
+  obj <- CreateModalityObject(counts(sim))
+  gc()
+  # add the seurat slot
+  obj <- PreprocessObject(obj,  nFeatures = 500)
+  gc()
+  # add the scrna slot
+  obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+  gc()
+  obj <- PreprocessObject(obj, method = "SCTransform", nFeatures = 500)
+  
+  # run modality test
+  obj <- TestModality(obj)
+  obj <- TestModality(obj, type = "Scrna")
+  obj <-TestModality(obj, type = "SCTransform")
+  
+  # run consensus test
+  obj <- .ConsensusTest(obj)
+  
+  # update the lists
+  # seurat
+  seurat.pc.cor[[iter]] <- obj@Tests$Seurat$Dip$PC$Pearson
+  seurat.pc.eucl[[iter]] <- obj@Tests$Seurat$Dip$PC$Euclidean
+  seurat.umap.eucl[[iter]] <- obj@Tests$Seurat$Dip$Umap$Euclidean
+  
+  # scrna
+  scrna.pc.cor[[iter]] <- obj@Tests$Scrna$Dip$PC$Pearson
+  scrna.pc.eucl[[iter]] <- obj@Tests$Scrna$Dip$PC$Euclidean
+  scrna.umap.eucl[[iter]] <- obj@Tests$Scrna$Dip$Umap$Euclidean
+  
+  # sct
+  sct.pc.cor[[iter]] <- obj@Tests$SCTransform$Dip$PC$Pearson
+  sct.pc.eucl[[iter]] <- obj@Tests$SCTransform$Dip$PC$Euclidean
+  sct.umap.eucl[[iter]] <- obj@Tests$SCTransform$Dip$Umap$Euclidean
+  
+  # update consensus
+  con.vals[[iter]] <- sum(obj@Tests$Multiview$Umap$nd_type == "sig")
+  
+  iter <- iter + 1
+  rm(obj)
+  gc()
+}
+
+# plot the results
+# Seurat
+seurat.table <- data.frame(props,seurat.pc.cor,seurat.pc.eucl,seurat.umap.eucl)
+colnames(seurat.table) <- c("Proportion", "PC.Cor", "PC.Eucl", "Umap.Eucl")
+seurat.table.melted <- data.table::melt(seurat.table, id.vars = "Proportion", variable.name = "Test")
+p.seurat <- ggplot2::ggplot(seurat.table.melted) + geom_point(aes(Proportion, value, color = Test)) +
+                                        xlab("Cluster Proportion") + ylab("P Value") + theme_gray() +
+                                             labs(title = "Seurat - Intermediate Separability") + 
+                                               theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+                                                  facet_grid(. ~ Test) +
+                                                    geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+
+# Scrna
+scrna.table <- data.frame(props,scrna.pc.cor,scrna.pc.eucl,scrna.umap.eucl)
+colnames(scrna.table) <- c("Proportion", "PC.Cor", "PC.Eucl", "Umap.Eucl")
+scrna.table.melted <- data.table::melt(scrna.table, id.vars = "Proportion", variable.name = "Test")
+p.scrna <- ggplot2::ggplot(scrna.table.melted) + geom_point(aes(Proportion, value, color = Test)) +
+                                        xlab("Cluster Proportion") + ylab("P Value") + theme_gray() +
+                                             labs(title = "Scrna - Intermediate Separability") + 
+                                               theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+                                                  facet_grid(. ~ Test) +
+                                                     geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+
+# SCTransform
+sct.table <- data.frame(props,sct.pc.cor,sct.pc.eucl,sct.umap.eucl)
+colnames(sct.table) <- c("Proportion", "PC.Cor", "PC.Eucl", "Umap.Eucl")
+sct.table.melted <- data.table::melt(sct.table, id.vars = "Proportion", variable.name = "Test")
+p.sct <- ggplot2::ggplot(sct.table.melted) + geom_point(aes(Proportion, value, color = Test)) +
+                                        xlab("Cluster Proportion") + ylab("P Value") + theme_gray() +
+                                             labs(title = "SCTransform - Intermediate Separability") + 
+                                               theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+                                                  facet_grid(. ~ Test) +
+                                                     geom_hline(yintercept=0.05, linetype="dashed", color = "red")
+
+# Consensus test
+con.table <- data.frame(props, con.vals)
+colnames(con.table) <- c("Proportion", "Num.Clusters")
+p.con <- ggplot2::ggplot(con.table) + geom_point(aes(Proportion, Num.Clusters)) +
+                                        xlab("Cluster Proportion") + ylab("Number of Significant Nodes") + theme_gray() +
+                                             labs(title = "Consensus - Intermediate Separability") + 
+                                               theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))  +
+                                                     geom_hline(yintercept=1, linetype="dashed", color = "red")
+
+# combine the plots
+p.final <- plot_grid(p.seurat, p.scrna, p.sct, p.con, labels = c("A","B","C","D"))
+
+# run simulations
+
+# sim <- scater::normalize(sim)
+# p <- plotPCA(sim, colour_by = "Group")
+
+# sim.counts <- counts(sim)
+
+
+
+
+
+# seurat <- as.data.frame(unlist(obj@Tests$Seurat$Dip))
+# colnames(seurat) <- c("Seurat.Dip.Pvalue")
+# 
+# sctransfrom <- as.data.frame(unlist(obj@Tests$SCTransform$Dip))
+# colnames(sctransfrom) <- c("SCTransform.Dip")
+# 
+# scrna <- as.data.frame(unlist(obj@Tests$Scrna$Dip))
+# colnames(scrna) <- c("Scrna.Dip.Pvalue")
+# 
+# res.table <- cbind(scrna, seurat, sctransfrom)
+# colnames(res.table) <- c("Seurat", "Scrna", "SCTransform")
+# 
+# # plot heat map
+# obj.heatmap <- pheatmap::pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, main = paste("Dip Heatmap"), display_numbers = T, number_color = "black")
+# heatmap.dip <- ggplotify::as.ggplot(obj.heatmap)
+
+# run consensus test
+
+
+# # plot result table
+# obj <- .PlotRes(obj)
+# obj.labels <- .MultiCutTRee(obj@Tests$Multiview$Umap)
+```
+
+
+

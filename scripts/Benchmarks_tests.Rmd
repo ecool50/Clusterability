@@ -1,0 +1,92 @@
+---
+title: "Benchmark Tests"
+author: "Elijah Willie"
+date: "April 18, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load in required libraries
+```{r}
+setwd("/home/elijah/Documents/Clusterability")
+rm(list = ls())
+#library(sf)
+library(Seurat)
+library(fastcluster)
+library(parallelDist)
+library(tidyverse)
+library(cluster)
+library(Rclusterpp)
+library(sigclust2)
+library(data.table)
+library(dendextend)
+library(corrplot)
+library(ape)
+library(parallel)
+library(agricolae)
+library(lubridate)
+library(factoextra)
+library(clustertend)
+library(Emcdf)
+library("diptest")
+library(Rtsne)
+library(cluster)
+library(dismay)
+#load helper functions
+source("Helper_Functions.R")
+source("SigClust_mod.R")
+#source("Consensus_Function.R")
+library(PPCI)
+```
+
+# This markdown document will run the current pipleline on a few benchmark datasets.
+
+
+## Create a function to run analyses for a given dataset
+```{r}
+Run_Analyses <- function(path, data_name){
+  
+  # create the seurat object
+obj <- as.seurat(readRDS(path))
+
+# preprocess
+obj <- .PreProcess(obj, low_thres = c(200, -Inf, -Inf), high_thres = c(2500, 0.05, Inf))
+
+#compute highly variable genes
+varGenes <- .SortGenes(obj)
+obj_sub <- .GetGeneData(obj, varGenes$gene)
+
+rm(obj)
+gc()
+# compute minimum density hyperplanes
+sol <- mdh(t(obj_sub))
+
+# plot the results
+plot(sol)
+plot(sol$fitted[, 1], sol$fitted[, 2], xlab = "Plane 1", ylab = "Plane 2", main = "Minimum density hyperplane data projection")
+
+# run the dip test
+sol_dist <- parallelDist(sol$fitted)
+sol_dip <- dip.test(sol_dist)$p.value
+
+# plot the results
+hist(sol_dist, breaks = 300, main = paste(data_name,"density plot on Min Density Hyperplane", "\nDip Test p-value =", round(sol_dip,4)), xlab = "Distance", probability = T, col = "lightblue")
+lines(density(sol_dist), col="red", lwd=2)
+}
+
+
+```
+
+
+# Test function
+```{r}
+path <- "Data/Benchmarks/Brain/chen.rds"
+data_name <- "Chen"
+
+# test the function
+Run_Analyses(path = path, data_name = data_name)
+```
+

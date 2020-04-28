@@ -1,0 +1,777 @@
+---
+title: "Simulations"
+author: "Elijah Willie"
+date: "15/07/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load required librares
+```{r}
+rm(list = ls())
+gc()
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(fastcluster)
+  library(parallelDist)
+  library(tidyverse)
+  library(cluster)
+  library(data.table)
+  library("diptest")
+  library(Rtsne)
+  library(PPCI)
+  library(splatter)
+  library(SC3)
+  library(scater)
+  library(SingleCellExperiment)
+  library(jackstraw)
+  library(irlba)
+  library(WGCNA)
+  library(Rfast)
+  library(gridExtra)
+  library(reticulate)
+  library(corpcor)
+  library(cowplot)
+  library(umap)
+  library(Rtsne)
+  library(sctransform)
+  library(pheatmap)
+  library(ggplotify)
+  library(mvcluster)
+}
+)
+setwd("/home/elijah/Documents/Clusterability")
+source("Helper_Functions.R")
+source("/home/elijah/Documents/scrna2019/algs/glmpca.R")
+source("/home/elijah/Documents/scrna2019/util/functions.R")
+source("/home/elijah/Documents/scrna2019/util/functions_genefilter.R")
+source("Pipeline_Functions.R")
+```
+
+# Simulate increasing dimensionality with a single cluster
+```{r}
+# lists to hold test proportions
+# Seurat
+seurat_raw_props <- c()
+seurat_pc_props <- c()
+seurat_mdh_props <- c()
+
+# Scrna
+scrna_raw_props <- c()
+scrna_pc_props <- c()
+scrna_mdh_props <- c()
+
+# SC3
+sc3_k <- c()
+
+# simulation parameters
+# prob_vec <- c(1/3, 1/3, 1/3)
+genes_dim <- seq(1500, 15000, 500)
+
+for(i in genes_dim){
+  
+  cat(paste("\nRunning on",i,"Genes\n"))
+  
+  params.groups <- newSplatParams(batchCells = 2000, nGenes = i, seed = 1994)
+  
+  # run simulations
+  sim <- splatSimulateGroups(params.groups, verbose = FALSE)
+  
+  # sim_norm <- scater::normalize(sim)
+  # p <- plotPCA(sim_norm, colour_by = "Group")
+  # plot(p)
+  
+  # extract the counts
+  sim_counts <- counts(sim)
+  
+  # run the pipeline
+  obj <- CreateModalityObject(sim_counts)
+  
+  # add the seurat slot
+  obj <- PreprocessObject(obj,  nFeatures = 1000)
+  
+  # add the scrna slot
+  obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+  
+  # Run the Seurat modality tests
+  obj <- TestModality(obj)
+  obj <- TestModality(obj, type = "Scrna")
+  
+  # compute a result table for all the tests
+  seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+  colnames(seurat) <- c("Seurat.Dip.Pvalue")
+  
+  scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+  colnames(scrna) <- c("Scrna.Dip.Pvalue")
+  
+  res_table <- cbind(scrna, seurat)
+  
+  # compute the proportions of passed test
+  obj <- ComputeProportions(obj)
+  
+  # update the proportions
+  # Seurat
+  seurat_raw_props <- c(seurat_raw_props, obj@Tests$Seurat$Proportions$seurat_raw)
+  seurat_pc_props <- c(seurat_pc_props, obj@Tests$Seurat$Proportions$seurat_pc)
+  seurat_mdh_props <- c(seurat_mdh_props, obj@Tests$Seurat$Proportions$seurat_mdh)
+  
+  # Scrna
+  scrna_raw_props <- c(scrna_raw_props, obj@Tests$Scrna$Proportions$scrna_raw)
+  scrna_pc_props <- c(scrna_pc_props, obj@Tests$Scrna$Proportions$scrna_pc)
+  scrna_mdh_props <- c(scrna_mdh_props, obj@Tests$Scrna$Proportions$scrna_mdh)
+  
+  rm(obj)
+  gc()
+  
+}
+
+Seurat_props <- data.frame(genes_dim, seurat_raw_props, seurat_pc_props, seurat_mdh_props)
+colnames(Seurat_props) <- c("nGenes", "Baseline", "PCA", "MDH")
+
+Seurat_melted <- data.table::melt(Seurat_props, id.vars = "nGenes", variable.name = "Reduction")
+
+p1 <- ggplot2::ggplot(Seurat_melted) + geom_point(aes(nGenes, value, color = Reduction)) +
+                                        xlab("Number of Genes") + ylab("Proportion") + theme_gray() +
+                                            ggtitle("Seurat Significance Proportions") +
+                                                  facet_grid(. ~ Reduction) 
+
+Scrna_props <- data.frame(genes_dim, scrna_raw_props, scrna_pc_props, scrna_mdh_props)
+colnames(Scrna_props) <- c("nGenes", "Baseline", "PCA", "MDH")
+
+Scrna_melted <- data.table::melt(Scrna_props, id.vars = "nGenes", variable.name = "Reduction")
+
+p2 <- ggplot2::ggplot(Scrna_melted) + geom_point(aes(nGenes, value, color = Reduction)) +
+                                        xlab("Number of Genes") + ylab("Proportion") + theme_gray() +
+                                            ggtitle("Scrna significance proportions") +
+                                                  facet_grid(. ~ Reduction) 
+  
+```
+
+## save the plots
+```{r}
+pdf("/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Genes_Proportions_Plots_1000.pdf", width = 12, height = 8)
+t1 <- arrangeGrob(p1, p2, ncol = 2)
+plot(t1)
+dev.off()
+```
+## write files to csv
+```{r}
+write.csv(Seurat_props, 
+          file = "/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Seurat_Genes_Proportions_Plots_1000.csv")
+
+write.csv(Scrna_props, 
+          file = "/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Scrna_Genes_Proportions_Plots_1000.csv")
+```
+
+
+# Simulate increasing cluster overlap
+```{r}
+overlap_seq <- seq(0, 0.5, 0.005)
+
+# lists to hold test proportions
+# Seurat
+seurat_raw_props <- c()
+seurat_pc_props <- c()
+seurat_mdh_props <- c()
+
+# Scrna
+scrna_raw_props <- c()
+scrna_pc_props <- c()
+scrna_mdh_props <- c()
+
+# simulation parameters
+prob_vec <- c(1/3, 1/3, 1/3)
+
+for(i in overlap_seq){
+  
+  cat(paste("\nRunning on",i,"Overlap\n"))
+  
+  params.groups <- newSplatParams(batchCells = 3000, nGenes = 2000, seed = 1994)
+  
+  # run simulations
+  sim <- splatSimulateGroups(params.groups, group.prob = prob_vec, de.facLoc = c(1,1,1)*i,
+                               de.facScale = c(1,1,1)*i, verbose = FALSE)
+  
+  sim_norm <- scater::normalize(sim)
+  p4 <- plotPCA(sim_norm, colour_by = "Group") + ggtitle(paste("PCA plot of 3 groups with cluster overlap of 0.3"))
+  # 
+  
+  # extract the counts
+  sim_counts <- counts(sim)
+  
+  # run the pipeline
+  obj <- CreateModalityObject(sim_counts)
+  
+  # add the seurat slot
+  obj <- PreprocessObject(obj,  nFeatures = 1000)
+  
+  # add the scrna slot
+  obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+  
+  # Run the Seurat modality tests
+  obj <- TestModality(obj)
+  obj <- TestModality(obj, type = "Scrna")
+  
+  # sc3 analysis
+  # sc3_sce <- SingleCellExperiment(
+  #     assays = list(counts = obj@Data$cleaned)
+  # )
+  # sc3_sce <- normalize(sc3_sce)
+  # 
+  # sc3_sce <- sc3_estimate_k(sc3_sce)
+  # sc3_sce@metadata$sc3
+  # 
+  
+  # compute a result table for all the tests
+  seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+  colnames(seurat) <- c("Seurat.Dip.Pvalue")
+  
+  scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+  colnames(scrna) <- c("Scrna.Dip.Pvalue")
+  
+  res_table <- cbind(scrna, seurat)
+  
+  # compute the proportions of passed test
+  obj <- ComputeProportions(obj)
+  
+  # update the proportions
+  # Seurat
+  seurat_raw_props <- c(seurat_raw_props, obj@Tests$Seurat$Proportions$seurat_raw)
+  seurat_pc_props <- c(seurat_pc_props, obj@Tests$Seurat$Proportions$seurat_pc)
+  seurat_mdh_props <- c(seurat_mdh_props, obj@Tests$Seurat$Proportions$seurat_mdh)
+  
+  # Scrna
+  scrna_raw_props <- c(scrna_raw_props, obj@Tests$Scrna$Proportions$scrna_raw)
+  scrna_pc_props <- c(scrna_pc_props, obj@Tests$Scrna$Proportions$scrna_pc)
+  scrna_mdh_props <- c(scrna_mdh_props, obj@Tests$Scrna$Proportions$scrna_mdh)
+  
+  rm(obj)
+  gc()
+}
+
+  
+Seurat_props <- data.frame(overlap_seq, seurat_raw_props, seurat_pc_props, seurat_mdh_props)
+colnames(Seurat_props) <- c("Overlap", "Baseline", "PCA", "MDH")
+
+Seurat_melted <- data.table::melt(Seurat_props, id.vars = "Overlap", variable.name = "Reduction")
+
+p1 <- ggplot2::ggplot(Seurat_melted) + geom_point(aes(Overlap, value, color = Reduction)) +
+                                        xlab("Cluster Overlap") + ylab("Proportion") + theme_gray() +
+                                            ggtitle("Seurat Significance Proportions") +
+                                                  facet_grid(. ~ Reduction) 
+
+Scrna_props <- data.frame(overlap_seq, scrna_raw_props, scrna_pc_props, scrna_mdh_props)
+colnames(Scrna_props) <- c("Overlap", "Baseline", "PCA", "MDH")
+
+Scrna_melted <- data.table::melt(Scrna_props, id.vars = "Overlap", variable.name = "Reduction")
+
+p2 <- ggplot2::ggplot(Scrna_melted) + geom_point(aes(Overlap, value, color = Reduction)) +
+                                        xlab("Cluster Overlap") + ylab("Proportion") + theme_gray() +
+                                            ggtitle("Scrna Significance Proportions") +
+                                                  facet_grid(. ~ Reduction) 
+```
+
+
+# save the plots
+```{r}
+pdf("/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Cluster_Overlap_Proportions_Plots_1000.pdf", width = 10, height = 10)
+t1 <- arrangeGrob(p1, p2, ncol = 2)
+plot(t1)
+dev.off()
+```
+
+# Simulate Paths
+```{r}
+paths <- seq(2, 52, 1)
+# lists to hold test proportions
+# Seurat
+seurat_raw_props <- c()
+seurat_pc_props <- c()
+seurat_mdh_props <- c()
+
+# Scrna
+scrna_raw_props <- c()
+scrna_pc_props <- c()
+scrna_mdh_props <- c()
+
+
+for(i in paths){
+  
+  cat(paste("\nRunning on",i,"Overlap\n"))
+  
+  params.groups <- newSplatParams(batchCells = 3000, nGenes = 2000, seed = 1994)
+  
+  # run simulations
+  sim <- splatSimulatePaths(params.groups, path.length = i, de.prob = 0.5, de.facLoc = 0.5, verbose = FALSE)
+  
+  # sim_norm <- scater::normalize(sim)
+  # p5 <- plotPCA(sim_norm, colour_by = "Step") + ggtitle(paste("PCA plot of path length 10"))
+  # 
+  
+  # extract the counts
+  sim_counts <- counts(sim)
+  
+  # run the pipeline
+  obj <- CreateModalityObject(sim_counts)
+  
+  # add the seurat slot
+  obj <- PreprocessObject(obj,  nFeatures = 1000)
+  
+  # add the scrna slot
+  obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+  
+  # Run the Seurat modality tests
+  obj <- TestModality(obj)
+  obj <- TestModality(obj, type = "Scrna")
+  
+  
+  # compute a result table for all the tests
+  seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+  colnames(seurat) <- c("Seurat.Dip.Pvalue")
+  
+  scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+  colnames(scrna) <- c("Scrna.Dip.Pvalue")
+  
+  res_table <- cbind(scrna, seurat)
+  
+  # compute the proportions of passed test
+  obj <- ComputeProportions(obj)
+  
+  # update the proportions
+  # Seurat
+  seurat_raw_props <- c(seurat_raw_props, obj@Tests$Seurat$Proportions$seurat_raw)
+  seurat_pc_props <- c(seurat_pc_props, obj@Tests$Seurat$Proportions$seurat_pc)
+  seurat_mdh_props <- c(seurat_mdh_props, obj@Tests$Seurat$Proportions$seurat_mdh)
+  
+  # Scrna
+  scrna_raw_props <- c(scrna_raw_props, obj@Tests$Scrna$Proportions$scrna_raw)
+  scrna_pc_props <- c(scrna_pc_props, obj@Tests$Scrna$Proportions$scrna_pc)
+  scrna_mdh_props <- c(scrna_mdh_props, obj@Tests$Scrna$Proportions$scrna_mdh)
+  
+  rm(obj)
+  gc()
+}
+
+  
+Seurat_props <- data.frame(paths, seurat_raw_props, seurat_pc_props, seurat_mdh_props)
+colnames(Seurat_props) <- c("NumPaths", "Baseline", "PCA", "MDH")
+
+Seurat_melted <- data.table::melt(Seurat_props, id.vars = "NumPaths", variable.name = "Reduction")
+
+p1 <- ggplot2::ggplot(Seurat_melted) + geom_point(aes(NumPaths, value, color = Reduction)) +
+                                        xlab("Path Length") + ylab("Proportion") + theme_gray() +
+                                            ggtitle("Seurat Significance Proportions") +
+                                                  facet_grid(. ~ Reduction) 
+
+Scrna_props <- data.frame(paths, scrna_raw_props, scrna_pc_props, scrna_mdh_props)
+colnames(Scrna_props) <- c("NumPaths", "Baseline", "PCA", "MDH")
+
+Scrna_melted <- data.table::melt(Scrna_props, id.vars = "NumPaths", variable.name = "Reduction")
+
+p2 <- ggplot2::ggplot(Scrna_melted) + geom_point(aes(NumPaths, value, color = Reduction)) +
+                                        xlab("Path Length") + ylab("Proportion") + theme_gray() +
+                                            ggtitle("Scrna Significance Proportions") +
+                                                  facet_grid(. ~ Reduction) 
+
+```
+
+## save the plots
+```{r}
+pdf("/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Path_Lengths_Proportions_Plots_1000.pdf", width = 12, height = 8)
+#t1 <- arrangeGrob(p3, p4, p5)
+t2 <- arrangeGrob(p1, p2, ncol = 2)
+#plot(t1)
+plot(t2)
+dev.off()
+```
+## write files to csv
+```{r}
+write.csv(Seurat_props, 
+          file = "/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Seurat_Path_Lengths_Proportions_Plots.csv")
+
+write.csv(Scrna_props, 
+          file = "/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Scrna_Path_Lengths_Proportions_Plots.csv")
+```
+
+
+# Simulate a single cluster with increasing number of cells
+```{r}
+# lists to hold test proportions
+# Seurat
+seurat_raw_props <- c()
+seurat_pc_props <- c()
+seurat_mdh_props <- c()
+
+# Scrna
+scrna_raw_props <- c()
+scrna_pc_props <- c()
+scrna_mdh_props <- c()
+
+# SC3
+sc3_k <- c()
+
+# simulation parameters
+# prob_vec <- c(1/3, 1/3, 1/3)
+cells_dim <- seq(1000, 12500, 500)
+
+for(i in cells_dim){
+  
+  cat(paste("\nRunning on",i,"Cells\n"))
+  
+  params.groups <- newSplatParams(batchCells = i, nGenes = 2000, seed = 1994)
+  
+  # run simulations
+  sim <- splatSimulateGroups(params.groups, verbose = FALSE)
+  
+  sim_norm <- scater::normalize(sim)
+  p5 <- plotPCA(sim_norm) + ggtitle(paste("PCA plot of 13000 cells"))
+  # plot(p)
+  
+  # extract the counts
+  sim_counts <- counts(sim)
+  
+  # run the pipeline
+  obj <- CreateModalityObject(sim_counts)
+  
+  # add the seurat slot
+  obj <- PreprocessObject(obj,  nFeatures = 1000)
+  
+  # add the scrna slot
+  obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 1000)
+  
+  # Run the Seurat modality tests
+  obj <- TestModality(obj)
+  obj <- TestModality(obj, type = "Scrna")
+  
+  # compute a result table for all the tests
+  seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+  colnames(seurat) <- c("Seurat.Dip.Pvalue")
+  
+  scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+  colnames(scrna) <- c("Scrna.Dip.Pvalue")
+  
+  res_table <- cbind(scrna, seurat)
+  
+  # compute the proportions of passed test
+  obj <- ComputeProportions(obj)
+  
+  # update the proportions
+  # Seurat
+  seurat_raw_props <- c(seurat_raw_props, obj@Tests$Seurat$Proportions$seurat_raw)
+  seurat_pc_props <- c(seurat_pc_props, obj@Tests$Seurat$Proportions$seurat_pc)
+  seurat_mdh_props <- c(seurat_mdh_props, obj@Tests$Seurat$Proportions$seurat_mdh)
+  
+  # Scrna
+  scrna_raw_props <- c(scrna_raw_props, obj@Tests$Scrna$Proportions$scrna_raw)
+  scrna_pc_props <- c(scrna_pc_props, obj@Tests$Scrna$Proportions$scrna_pc)
+  scrna_mdh_props <- c(scrna_mdh_props, obj@Tests$Scrna$Proportions$scrna_mdh)
+  
+  rm(obj)
+  gc()
+  
+}
+
+Seurat_props <- data.frame(cells_dim[1:24], seurat_raw_props, seurat_pc_props, seurat_mdh_props)
+colnames(Seurat_props) <- c("nCells", "Baseline", "PCA", "MDH")
+
+Seurat_melted <- data.table::melt(Seurat_props, id.vars = "nCells", variable.name = "Reduction")
+
+p1 <- ggplot2::ggplot(Seurat_melted) + geom_point(aes(nCells/500, value, color = Reduction)) +
+                                        xlab("Number of Cells * 500") + ylab("Proportion") + theme_gray() + 
+                                        theme(plot.title = element_text(hjust = 0.5)) +
+                                            ggtitle("Seurat Significance Proportions") +
+                                                  facet_grid(. ~ Reduction) 
+
+Scrna_props <- data.frame(cells_dim[1:24], scrna_raw_props, scrna_pc_props, scrna_mdh_props)
+colnames(Scrna_props) <- c("nCells", "Baseline", "PCA", "MDH")
+
+Scrna_melted <- data.table::melt(Scrna_props, id.vars = "nCells", variable.name = "Reduction")
+
+p2 <- ggplot2::ggplot(Scrna_melted) + geom_point(aes(nCells/500, value, color = Reduction)) +
+                                        xlab("Number of Cells * 500") + ylab("Proportion") + theme_gray() + 
+                                          theme(plot.title = element_text(hjust = 0.5)) +
+                                            ggtitle("Scrna Significance Proportions") +
+                                                  facet_grid(. ~ Reduction) 
+  
+```
+
+## save the plots
+```{r}
+pdf("/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Cells_Proportions_Plots_1000.pdf", width = 12, height = 8)
+#t1 <- arrangeGrob(p3, p4, p5)
+t2 <- arrangeGrob(p1, p2, ncol = 2)
+#plot(t1)
+plot(t2)
+dev.off()
+```
+## write files to csv
+```{r}
+write.csv(Seurat_props, 
+          file = "/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Seurat_Cells_Proportions_Plots.csv")
+
+write.csv(Scrna_props, 
+          file = "/home/elijah/Documents/Clusterability/Results/Pipeline/Simulations/Scrna_Cells_Proportions_Plots.csv")
+```
+
+
+# Simulation based on real data
+```{r}
+# get the counts
+counts <- fread("Data/SPF_allTcells.txt") %>% column_to_rownames(var = "V1")
+
+# get the parameters
+params <- splatEstimate(as.matrix(counts))
+
+# Run the easy simulation on four groups
+sim <-  splatSimulate(params = params, batchCells = 3000,
+                     group.prob = c(0.2, 0.15, 0.4, 0.25), 
+                     method = "groups", de.prob = c(0.01, 0.05, 0.05, 0.08),
+                     verbose = FALSE)
+
+sim_norm <- scater::normalize(sim)
+p3 <- plotPCA(sim_norm, colour_by = "Group")
+
+sc3_sce <- sc3_estimate_k(sim_norm)
+sc3_sce@metadata$sc3
+
+# extract the counts
+sim_counts <- counts(sim)
+
+# run the pipeline
+obj <- CreateModalityObject(sim_counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot Phate
+seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+plots <- plot_grid(p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap, p.seurat.phate, p.scrna.phate, 
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H", "I"))
+  
+```
+
+# create some data and shuffle it
+```{r}
+params.groups <- newSplatParams(batchCells = 2000, nGenes = 2000, seed = 1994)
+
+# run simulations
+sim <- splatSimulateGroups(params.groups, group.prob = c(0.4, 0.25, 0.35), de.facLoc = c(1,1,1)*0.1,
+                               de.facScale = c(1,1,1)*0.1,  verbose = FALSE)
+
+sim_norm <- scater::normalize(sim)
+p3 <- plotPCA(sim_norm, colour_by = "Group") + ggtitle("Orginal PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# sim.meta.data <- as.data.frame(sim@colData$Group)
+# rownames(sim.meta.data) <- sim@colData$Cell
+# colnames(sim.meta.data) <- c("Cluster")
+# 
+# sim.counts <- counts(sim)
+# 
+# obj <- CreateSeuratObject(sim.counts, meta.data = sim.meta.data, project = "Proj", min.cells = 5, min.features = 200)
+# Idents(obj) <- "Cluster"
+```
+
+
+## Run on the first cluster
+```{r}
+# c1.counts <- as.matrix(GetAssayData(obj, slot = "counts")[, WhichCells(obj, idents = "Group1")])
+# c2.counts <- as.matrix(GetAssayData(obj, slot = "counts")[, WhichCells(obj, idents = "Group2")])
+sim.counts <- counts(sim)
+
+# sim.counts <- sim.counts[, sample(4000, replace = T)]
+# c1.counts <- sim.counts[, 1:2000]
+# c2.counts <- sim.counts[, 2001:4000]
+# # n <- nrow(c1.counts)
+# c1.shuffled <- c1.counts[sample(ceiling(nrow(c1.counts))), ]
+# c2.shuffled <- c2.counts[sample(nrow(c2.counts)), ]
+# # 
+# # c1.temp <- c1.counts[!rownames(c1.counts) %in% rownames(c1.shuffled), ]
+# #c1.counts <- rbind(c1.temp, c1.shuffled)
+# 
+# c.all <- cbind(c1.counts, c2.counts)
+true.clusters <- as.numeric(colData(sim)$Group)
+# run the pipeline
+obj <- CreateModalityObject(sim.counts)
+
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+
+# sc3 analysis
+sce <- SingleCellExperiment(
+    assays = list(
+        counts = as.matrix(obj@Seurat$Scaled.Data),
+        logcounts = as.matrix(obj@Seurat$Scaled.Data)
+    )
+)
+ 
+ sce <- sc3_estimate_k(sce)
+ sce@metadata$sc3
+ # define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+sce <- sc3(sce, ks = 3, biology = F, gene_filter = F)
+
+# Run the Seurat modality tests
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+
+
+# compute a result table for all the tests
+seurat <- as.data.frame(unlist(obj@Tests$Seurat))
+colnames(seurat) <- c("Seurat.Dip.Pvalue")
+
+scrna <- as.data.frame(unlist(obj@Tests$Scrna))
+colnames(scrna) <- c("Scrna.Dip.Pvalue")
+
+res.table <- cbind(scrna, seurat)
+colnames(res.table) <- c("Seurat", "Scrna")
+
+# plot heat map
+obj.heatmap <- pheatmap(as.matrix(res.table), cluster_rows = F, cluster_cols = F, breaks = c(0, 0.05, 1), color = c("lightblue", "gray"), main = paste("Heatmap"))
+heatmap <- as.ggplot(obj.heatmap)
+
+seurat_pca_df <- as.data.frame(obj@Seurat$Sig.PCs.Data[, 1:2])
+scrna_pca_df <- as.data.frame(obj@Scrna$Sig.PCs.Data[, 1:2])
+
+# Run PCA
+p.pca <- ggplot(seurat_pca_df) + geom_point(aes(PC_1, PC_2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Seurat PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+p.pca.scrna <- ggplot(scrna_pca_df) + geom_point(aes(PC1, PC2))  +
+                                        xlab("PC1") + ylab("PC2") +  ggtitle(paste("Scrna PCA")) + theme_grey() +
+                                          theme(plot.title = element_text(hjust = 0.5))
+
+# Plot the Tsne
+seurat.tsne <- as.data.frame(obj@Seurat$Tsne.Data)
+p.seurat.tsne <-  ggplot(seurat.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.tsne <- as.data.frame(obj@Scrna$Tsne.Data)
+p.scrna.tsne <-  ggplot(scrna.tsne) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Tsne"), x = "Tsne_1", y = "Tsne_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# plot UMAP
+seurat.umap <- as.data.frame(obj@Seurat$Umap.Data)
+p.seurat.umap <- ggplot(seurat.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Seurat Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+scrna.umap <- as.data.frame(obj@Scrna$Umap.Data)
+p.scrna.umap <- ggplot(scrna.umap) + geom_point(aes(V1, V2)) + labs(title = paste("Scrna Umap"), x = "UMAP_1", y = "UMAP_1") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# # plot Phate
+# seurat.phate <- as.data.frame(obj@Seurat$Phate.Data)
+# p.seurat.phate <-  ggplot(seurat.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Seurat Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+# 
+# scrna.phate <- as.data.frame(obj@Scrna$Phate.Data)
+# p.scrna.phate <-  ggplot(scrna.phate) + geom_point(aes(PHATE1, PHATE2)) + labs(title = paste("Scrna Phate"), x = "Phate_1", y = "Phate_2") + theme_gray() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# combine the plots
+plots <- plot_grid(p3, p.pca, p.pca.scrna, p.seurat.tsne, p.scrna.tsne, 
+                       p.seurat.umap, p.scrna.umap,
+                   heatmap, labels = c("A", "B","C", "D", "E", "F","G", "H"))
+```
+
+
+# SC3 Analysis
+```{r}
+params.groups <- newSplatParams(batchCells = 3000, nGenes = 2000, seed = 1994)
+sim <- splatSimulateGroups(params.groups, group.prob = c(0.5,0.5), de.facLoc = c(1, 1)*0.5,
+                               de.facScale = c(1, 1)*0.5, verbose = FALSE, dropout.type = "experiment")
+
+sim_norm <- scater::normalize(sim)
+p3 <- plotPCA(sim_norm) + ggtitle("Orginal PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+counts <- counts(sim)
+sce <- SingleCellExperiment(
+    assays = list(
+        counts = as.matrix(counts),
+        logcounts = log2(as.matrix(counts) + 1)
+    )
+)
+
+# define feature names in feature_symbol column
+rowData(sce)$feature_symbol <- rownames(sce)
+# remove features with duplicated names
+sce <- sce[!duplicated(rowData(sce)$feature_symbol), ]
+ 
+sce <- sc3(sce, ks = 2:3)
+
+consensus <- metadata(sce)$sc3$consensus[[as.character(2)]]$consensus
+```
+
+# Consensus Clustering
+```{r}
+params.groups <- newSplatParams(batchCells = 5000, nGenes = 2000, seed = 1994)
+sim <- splatSimulateGroups(params.groups, group.prob = c(1),
+                               de.facScale = c(1))
+
+sim.counts <- counts(sim)
+obj <- CreateModalityObject(sim.counts)
+
+obj <- PreprocessObject(obj,  nFeatures = 500)
+
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+seurat.con.res <- ConsensusClusterPlus(t(obj@Seurat$Scaled.Data), maxK=3,reps=100,pItem=0.8,pFeature=1,
+                                       ,clusterAlg="hc",distance="pearson",seed=1994, verbose = T)[[3]][["consensusMatrix"]]
+scrna.con.res <- ConsensusClusterPlus(t(obj@Scrna$Deviances), maxK=3,reps=100,pItem=0.8,pFeature=1,
+                                       ,clusterAlg="hc",distance="pearson",seed=1994, verbose = T)[[3]][["consensusMatrix"]]
+```
+

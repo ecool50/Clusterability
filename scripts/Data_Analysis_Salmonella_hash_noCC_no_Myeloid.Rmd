@@ -1,0 +1,556 @@
+---
+title: "Data Analysis Salmonella Hash no Cycle no myeloid no Tfh"
+author: "Elijah Willie"
+date: "March 19, 2019"
+output: 
+  html_document:
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load in required libraries
+```{r}
+setwd("/home/elijah/Documents/Clusterability")
+rm(list = ls())
+#library(sf)
+library(Seurat)
+library(fastcluster)
+library(parallelDist)
+library(tidyverse)
+library(cluster)
+library(Rclusterpp)
+library(sigclust2)
+library(data.table)
+library(dendextend)
+library(corrplot)
+library(ape)
+library(parallel)
+library(agricolae)
+library(lubridate)
+library(factoextra)
+library(clustertend)
+library(Emcdf)
+library("diptest")
+library(Rtsne)
+library(cluster)
+#load helper functions
+source("Helper_Functions.R")
+source("SigClust_mod.R")
+#source("Consensus_Function.R")
+library(princurve)
+library(BSDA)
+library(boot)
+library(bigstatsr)
+library(BSDA)
+library(pcurve)
+```
+
+# Preprocess the data
+```{r}
+#create the seurat object
+obj <- .CreateSeuratObj("Data/Salmonella_hash_noCycle_noMyeloid.txt", Pname = "Salmonella no CC no Tfh", minCells = 5, minGenes = 200, matrix = F, sep = "\t")
+
+VlnPlot(object = obj, features.plot = c("nGene", "nUMI"), nCol = 2)
+
+#Preprocess the data
+obj <- .PreProcess(obj, low_thres = c(200, -Inf, -Inf), high_thres = c(2500, 0.05, Inf))
+
+
+#compute the number of variable genes
+length(obj@var.genes)
+```
+
+# Sort the highly variable by dispersion
+```{r}
+#get the variable genes sorted
+varGenes <- .SortGenes(obj)
+
+#get the data containing the top genes
+obj_sub <- .GetGeneData(obj, varGenes$gene)
+
+#rm(obj)
+#do some garbage collection
+obj_sub <- t(t(obj_sub)[-c(rownames(t(obj_sub)) %like% "Citro"), ])
+gc()
+```
+
+# Run the first test
+```{r}
+result <- .run_dip(350, obj_sub, varGenes = varGenes)
+#create a sequence of numbers
+seq_vals <- seq(50,350, by = 50)
+
+#iterate over sequence values and run program
+results <- NULL
+for(val in seq_vals){
+  result <- .run_dip(val, obj_sub, varGenes = varGenes)
+  #plot the result
+  plot(result$plot)
+  results[[val/50]] = result
+  gc()
+}
+
+
+#remove null values from the results
+results <- Filter(Negate(is.null), results)
+```
+
+# Run significant clustering on top 350 Variable genes
+```{r}
+result <- .run_dip(350, obj_sub, varGenes = varGenes)
+plot(result$plot, use_labs = F) + ggtitle("Significance clustering on top 350 variable genes")
+```
+
+# Run the second test
+```{r}
+boot_pvals <- NULL
+dist_list <- NULL
+dip_results <- NULL
+seq_vals <- seq(50,500, by = 50)
+for(i in seq_vals){
+  print(i)
+  #permute the data
+  permuted <- as.matrix(obj_sub[varGenes$gene[1:i], ])
+    #.GetGeneData(obj,varGenes$gene[1:i])
+    #GF_sub[sample(nrow(GF_sub), , replace=TRUE),]
+
+  #compute the distance
+  data_dist <- parallelDist(t(permuted))
+  dist_list[[i/50]] <- data_dist
+  gc()
+  #compute the dip stat
+  boot_pvals[[i/50]] <- dip.test(data_dist)$p.value
+  #dip_results[[i/50]] <- dip(data_dist, full.result = T)
+  gc()
+}
+boot_pvals
+```
+
+# Run the 3rd test
+```{r}
+#run consensus clustering
+output <- .Boot_Con(t(obj_sub), obj, distance="euclidean", method="ward",nboot=100)
+
+#extract the dendrogram
+dend <- as.dendrogram(output$dendrogram)
+
+#plot it
+plot(dend, type = "rectangle", ylab = "Height", edgePar = list(col = 2:3, lwd = 2:1),main = "Consensus Tree",  leaflab = "none")
+
+#compute the cluster assignments
+assignments <- cutree(dend, 2)
+
+#run the significance testing 
+Sig_Res <- .sigclust(t(obj_sub), labels = assignments)
+
+#print the p value
+Sig_Res$p_norm
+```
+
+
+# Perform PCA
+```{r}
+sig_pcs_list <- NULL
+data_pca_list <- NULL
+dip_list <- NULL
+seq_vals <- seq(50,850, by = 50)
+for(i in seq_vals){
+  #first run PCA
+obj <- RunPCA(object = obj, pc.genes = varGenes$gene[1:i], do.print = F, pcs.print = 1:5, 
+    genes.print = 5, pcs.compute = 25)
+
+#compute the proportion variance explained
+eigs <- obj@dr$pca@sdev^2
+#compute the proportion variance explained
+rbind(var = eigs, proportion = eigs/sum(eigs), Cumulative = cumsum(eigs)/sum(eigs))
+
+#extract the first PC
+#pc_1 <- as.matrix(GetCellEmbeddings(object = obj, reduction.type = "pca", dims.use = 1))
+
+
+# Perform pc significance testing
+gc()
+#determine statistically significant PCs using jackstraw
+obj <- JackStraw(object = obj, num.replicate = 100, num.cores = 4,do.par = T, display.progress = F)
+obj <- JackStrawPlot(object = obj, PCs = 1:20, nCol = 5)
+
+sig_indices <- which(obj@dr$pca@jackstraw@overall.p.values[, 2] < 0.05)
+
+sig_pcs <- sum(obj@dr$pca@jackstraw@overall.p.values < 0.05)
+sig_pcs_list[[i/50]] <- sig_pcs
+
+# extract the significant PCs data
+data_pca <- as.matrix(GetCellEmbeddings(object = obj, reduction.type = "pca", dims.use = sig_indices))
+pca_dist <- parallelDist(data_pca)
+data_pca_list[[i/50]] <- pca_dist
+
+# run the dip test
+dip_list[[i/50]] <- dip.test(pca_dist)$p.value
+
+  
+}
+```
+
+
+
+```{r}
+obj <- RunPCA(object = obj, pc.genes = obj@var.genes, do.print = F, pcs.print = 1:5, 
+    genes.print = 5, pcs.compute = 25)
+
+#compute the proportion variance explained
+eigs <- obj@dr$pca@sdev^2
+#compute the proportion variance explained
+rbind(var = eigs, proportion = eigs/sum(eigs), Cumulative = cumsum(eigs)/sum(eigs))
+
+#extract the first PC
+#pc_1 <- as.matrix(GetCellEmbeddings(object = obj, reduction.type = "pca", dims.use = 1))
+
+```
+
+
+
+
+# Perform pc significance testing
+```{r}
+
+gc()
+#determine statistically significant PCs using jackstraw
+obj <- JackStraw(object = obj, num.replicate = 100, num.cores = 6,do.par = T, display.progress = F,num.pc = 25)
+obj <- JackStrawPlot(object = obj, PCs = 1:25, nCol = 5)
+
+sig_indices <- which(obj@dr$pca@jackstraw@overall.p.values[, 2] < 0.05)
+
+
+sig_pcs <- sum(obj@dr$pca@jackstraw@overall.p.values < 0.05)
+
+# extract the significant PCs data
+data_pca <- as.matrix(GetCellEmbeddings(object = obj, reduction.type = "pca", dims.use = sig_indices))
+data_pca <- data_pca[-c(rownames(data_pca) %like% "Citro"), ]
+
+dirs <- obj@dr$pca@gene.loadings[, sig_indices]
+```
+
+
+# Compute the density plots
+```{r}
+pdf("Results/Salmonella_hash_noCycle_noMyeloid_plots.pdf")
+
+# on all the variable genes
+varGenes_dist <- parallelDist(t(obj_sub))
+varGenes_dip <- dip.test(varGenes_dist)$p.value
+var_plot_vals <- melt(as.matrix(varGenes_dist))
+
+hist(varGenes_dist, main = paste("Salmonella Hash No CC No Myeloid density plot on all variable genes. \nDip Test p-value =", round(varGenes_dip, 4)), xlab = "Distance", probability = T, col = "lightblue")
+lines(density(varGenes_dist), col="red", lwd=2)
+
+gc()
+
+# on just the significant PCs
+pca_dist <- parallelDist(data_pca)
+pca_dip <- dip.test(pca_dist)$p.value
+pca_plot_vals <- melt(as.matrix(pca_dist))
+
+
+hist(pca_dist, main = paste("Salmonella No CC No Myeloid density plot on significant PCs. \nDip Test p-value =", round(pca_dip,4)), xlab = "Distance", probability = T, col = "lightblue")
+lines(density(pca_dist), col="red", lwd=2)
+
+# on the first PC
+pc_1_dip <- dip.test(pc_1)$p.value
+
+hist(pc_1, main = paste("Salmonella No CC No Myeloid density plot on the first PC. \nDip Test p-value =", round(pc_1_dip,4)), xlab = "Distance", probability = T, col = "lightblue")
+lines(density(pc_1), col="red", lwd=2)
+
+dev.off()
+```
+
+# run the dip test on the significant PCs
+```{r}
+#perform the dip test on the pairwise distances between the significant PCs rotations
+pca_dist <- parallelDist(data_pca)
+dip_pca <- dip.test(parallelDist(data_pca))$p.value
+```
+
+```{r}
+dist_full <- parallelDist(t(obj_sub[varGenes$gene[1:350], ]))
+hist(dist_full, main = "SPF Density Plot", xlab = "Distance", probability = T, col = "red")
+lines(density(dist_full), col="blue", lwd=2)
+```
+# Perform the dip test on the first principal component
+```{r}
+#lets get the density plot of the first pc
+hist(pc_1, main = "SPF Density Plot of the first PC", xlab = "Value", probability = T, col = "red")
+lines(density(pc_1), col="blue", lwd=2)
+
+#run the dip test
+dip.test(pc_1)
+```
+
+
+# Save the plots
+```{r}
+pdf("Salmonella_noCC_no_myeloid.pdf")
+
+plot(result$plot, use_labs = F) + ggtitle("Significance clustering on top 350 variable genes")
+plot(dend, type = "rectangle", ylab = "Height", edgePar = list(col = 2:3, lwd = 2:1),main = "Consensus Tree, p = 0.0037",  leaflab = "none")
+
+#plot the initial Tsne
+TSNEPlot(obj) + ggtitle("Initial T-sne")
+
+#plot tsne and color by significant cluster
+TSNEPlot(obj, group.by ="significance.clustering") + ggtitle( "T-sne colored by significant nodes")
+
+#plot tsne and color by consensus clusters
+TSNEPlot(obj, group.by ="consensus.clusters") + ggtitle("T-sne colored by consensus nodes")
+
+hist(dist_full, main = "Density Plot on top 350 variable genes", xlab = "Distance", probability = T, col = "red")
+lines(density(dist_full), col="blue", lwd=2)
+
+hist(pc_1, main = "Density Plot of the first PC", xlab = "Value", probability = T, col = "red")
+lines(density(pc_1), col="blue", lwd=2)
+
+dev.off()
+
+# Compute 1d cluster and plot it on tsne
+
+```
+
+# extract the significance and the consensus cluster labels
+```{r}
+all_labels <- dplyr::select(obj@meta.data, significance.clustering, consensus.clusters)
+colnames(all_labels) <- c("Significance clustering", "Consensus clustering")
+
+#write it to a csv file
+write.csv(all_labels, file = "Salmonella_noCC_no_myeloid_clustering_labels.csv")
+```
+
+
+# principal curve analyses
+```{r}
+fit <- principal_curve(data_pca, trace = T, plot_iterations = T)
+```
+
+#plot a histogram of the projections
+```{r}
+#fit_dist <- parallelDist(fit$s[])
+fit_dip <- dip.test(fit$s[, 1])$p.value
+hist(fit$lambda, breaks = 100, main = paste("Salmonella Hash No CC No Myeloid density plot on Principal Curves. \nDip Test p-value =", round(fit_dip, 4)), xlab = "Distance", probability = T, col = "lightblue")
+lines(density(fit$lambda), col="red", lwd=2)
+```
+
+# Perform PCA
+```{r}
+sig_pcs_list <- NULL
+data_pca_list <- NULL
+dip_list <- NULL
+seq_vals <- seq(50,700, by = 50)
+pdf("Results/Salmonella_Hash_No_CC_No_Myeloid_All_Density_Z_Score_plots.pdf")
+for(i in seq_vals){
+  #first run PCA
+obj <- RunPCA(object = obj, pc.genes = varGenes$gene[1:i], do.print = F, pcs.print = 1:5, 
+    genes.print = 5, pcs.compute = 25)
+
+#compute the proportion variance explained
+eigs <- obj@dr$pca@sdev^2
+#compute the proportion variance explained
+rbind(var = eigs, proportion = eigs/sum(eigs), Cumulative = cumsum(eigs)/sum(eigs))
+
+#extract the first PC
+#pc_1 <- as.matrix(GetCellEmbeddings(object = obj, reduction.type = "pca", dims.use = 1))
+
+
+# Perform pc significance testing
+gc()
+#determine statistically significant PCs using jackstraw
+obj <- JackStraw(object = obj, num.replicate = 100, num.cores = 4,do.par = T, display.progress = F)
+obj <- JackStrawPlot(object = obj, PCs = 1:20, nCol = 5)
+
+sig_indices <- which(obj@dr$pca@jackstraw@overall.p.values[, 2] < 0.05)
+
+sig_pcs <- sum(obj@dr$pca@jackstraw@overall.p.values < 0.05)
+sig_pcs_list[[i/50]] <- sig_pcs
+
+# extract the significant PCs data
+data_pca <- as.matrix(GetCellEmbeddings(object = obj, reduction.type = "pca", dims.use = sig_indices))
+pca_dist <- znorm(parallelDist(data_pca))
+data_pca_list[[i/50]] <- pca_dist
+
+# run the dip test
+pca_dip <- dip.test(pca_dist)$p.value
+dip_list[[i/50]] <- pca_dip
+
+hist(pca_dist, breaks = 300, main = paste("Salmonella Hash No CC No Myeloid density plot on significant PCs on \n", i, "variable genes", "\nDip Test p-value =", round(pca_dip,4)), xlab = "Distance", probability = T, col = "lightblue")
+lines(density(pca_dist), col="red", lwd=2)
+
+
+  
+}
+dev.off()
+
+```
+
+
+# plot some results
+```{r}
+
+plot_vals <- data.frame("NumGenes" = seq_vals, "DipTest" = dip_list, "NumSigPcs" = sig_pcs_list)
+
+par(mfrow=c(2,2))
+plot(plot_vals$NumGenes, -log10(plot_vals$DipTest), xlab = "Number of variable genes", ylab = "log10(Dip test p-value)", main = "Dip test as a function of variable genes \n Red points (p < 0.05)",  col=ifelse(plot_vals$DipTest < 0.05,"red","black"), ylim = c(0, 5))
+
+plot(plot_vals$NumGenes, plot_vals$NumSigPcs, xlab = "Number of variable genes", ylab = "Number of significant PCs", main = " Num  Sig PCs as a function of variable genes")
+
+plot(plot_vals$NumSigPcs, -log10(plot_vals$DipTest), xlab = "Number of Significant PCs", ylab = "log10(Dip test p-value)", main = "Dip test as a function of Sig PCs \n Red points (p < 0.05)",  col=ifelse(plot_vals$DipTest < 0.05,"red","black"), ylim = c(0, 5))
+
+```
+
+
+# some exploration
+```{r}
+m = n = 10
+mymat2 = matrix(0,m,n)
+ctr=0
+for(i in 1:m) {
+  for(j in 1:n) 
+  {   
+   
+        data <- rbind(data_pca[, i], data_pca[, j])
+        b <- b <- boot(t(data), .perm_test, R=100, parallel="multicore", ncpus = 6)$t
+        
+      mymat2[i,j] = -1*.Compute_Z(b, data = data)  # we assign the values only when i<>j
+      ctr=ctr+1
+
+  }
+  #print(i*j) 
+}
+print(ctr)  # print how many matrix cells were assigned
+
+```
+
+
+```{r}
+pc <- pcurve(x = t(obj_sub), start = "mds", penalty = 2, cv.fit = T, cv.all = T, plot.init = F, plot.resp = F, plot.segs = T)
+
+
+```
+
+# Auto encoders
+```{r}
+# set training data
+x_train <- as.matrix(t(obj_sub))
+
+# set model
+model <- keras_model_sequential()
+model %>%
+  layer_dense(units = 6, activation = "tanh", input_shape = ncol(x_train)) %>%
+  layer_dense(units = 2, activation = "tanh", name = "bottleneck") %>%
+  layer_dense(units = 6, activation = "tanh") %>%
+  layer_dense(units = ncol(x_train))
+
+# view model layers
+summary(model)
+
+# compile model
+model %>% compile(
+  loss = "mean_squared_error", 
+  optimizer = "adam"
+)
+
+# fit model
+model %>% fit(
+  x = x_train, 
+  y = x_train, 
+  epochs = 2000,
+  verbose = 0
+)
+
+# evaluate the performance of the model
+mse.ae2 <- evaluate(model, x_train, x_train)
+mse.ae2
+
+# extract the bottleneck layer
+intermediate_layer_model <- keras_model(inputs = model$input, outputs = get_layer(model, "bottleneck")$output)
+intermediate_output <- predict(intermediate_layer_model, x_train)
+```
+
+#plot it
+```{r}
+ggplot(data.frame(Dim1 = intermediate_output[,1], Dim2 = intermediate_output[,2]), aes(x = Dim1, y = Dim2)) + geom_point()
+```
+
+# run dip test
+```{r}
+encoder_dist <- parallelDist(intermediate_output)
+plot(density(encoder_dist))
+dip.test(encoder_dist)
+```
+
+# PPCI
+```{r}
+X <- t(obj_sub)
+
+# perform Maximum Clusterability Dimension Reduction
+sol <- mcdr(X, 10)
+
+# plot results and run dip test
+sol_dist <- parallelDist(sol$fitted)
+plot(density(sol_dist))
+dip.test(sol_dist)
+```
+
+# Maximum Clusteriability Hyperplane
+```{r}
+X <- t(obj_sub)
+sol <- mch(X)
+plot(sol)
+plot(sol$fitted[, 1], sol$fitted[, 2])
+sol_dist <- parallelDist(sol$fitted)
+plot(density(sol_dist))
+dip.test(sol_dist)
+```
+
+# Minimum Density Hyperplane
+```{r}
+X <- t(obj_sub)
+sol <- mdh(X)
+pdf("Results/Salmonella_Hash_No_CC_No_Myeloid_Hyperplane_Sig_PCs_plots.pdf")
+plot(sol)
+sol_dist <- parallelDist(sol$fitted)
+dip_stat <- dip.test(sol_dist)$p.value
+
+
+plot(sol$fitted[, 1], sol$fitted[, 2], xlab = "Plane 1", ylab = "Plane 2", main = "Minimum density hyperplane data projection")
+hist(sol_dist, breaks = 300, main = paste("Salmonella Hash No CC No Myeloid Sig PCs \ndensity plot on Min Density Hyperplane", "\nDip Test p-value =", round(dip_stat,4)), xlab = "Distance", probability = T, col = "lightblue")
+lines(density(sol_dist), col="red", lwd=2)
+dev.off()
+```
+
+# Minimum Density Hyperplane on varying number of variable genes
+```{r}
+dip_list <- NULL
+seq_vals <- seq(50,850, by = 50)
+pdf("Results/Salmonella_Hash_No_CC_No_Myeloid_Min_Density_hyperplane_plots.pdf")
+for(i in seq_vals){
+
+  # extract the variable genes data
+  X <- t(.GetGeneData(obj, varGenes$gene[1:i]))
+
+  # get the minimum density hyper planes
+  sol <- mdh(X)
+  
+  # plot the results
+  plot(sol$fitted[, 1], sol$fitted[, 2], xlab = "Plane 1", ylab = "Plane 2", main = paste("Minimum density hyperplane data projection on", i, "variable genes"))
+  
+# run the dip test
+sol_dist <- parallelDist(sol$fitted)
+dip_stat <- dip.test(sol_dist)$p.value
+dip_list[i/50] <- dip_stat
+
+hist(sol_dist, breaks = 300, main = paste("Salmonella Hash No CC No Myeloid \ndensity plot on significant PCs on", i, "variable genes", "\nDip Test p-value =", round(dip_stat,4)), xlab = "Distance", probability = T, col = "lightblue")
+lines(density(sol_dist), col="red", lwd=2)
+  
+}
+dev.off()
+```

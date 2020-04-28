@@ -1,0 +1,343 @@
+---
+title: "Large Datasets"
+author: "Elijah Willie"
+date: "16/03/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+gc()
+options(warn=-1)
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(reticulate)
+  library(splatter)
+  library(SingleCellExperiment)
+  library(ggplot2)
+  library(dplyr)
+  library(clue)
+  library(pcaReduce)
+  library(parallelDist)
+  library(data.table)
+  library(multiview)
+  library(cowplot)
+  library(diptest)
+  library(pheatmap)
+  library(ggplotify)
+  library(tidyverse)
+  library(agricolae)
+  library(aricode)
+  library(Matrix)
+  library(Rcpp)
+  library(DuoClustering2018)
+  library(ggrepel)
+  library(pcurve)
+  library(mogsa)
+  # library(Rfast)
+  }
+)
+# source required functions
+setwd("~/Documents/Clusterability/scripts/")
+source("Helper_Functions.R")
+source("~/Documents/scrna2019-master/algs/glmpca.R")
+source("~/Documents/scrna2019-master/util/functions.R")
+source("~/Documents/scrna2019-master/util/functions_genefilter.R")
+source("Pipeline_Functions.R")
+source("Clustering_Functions.R")
+source("func.R")
+source("Dip_Functions.R")
+source("consensus_funcs.R")
+source("Plot_Funcs.R")
+source("cpca_mod.R")
+source("cpc_eigen.R")
+source("Kernel_Functions.R")
+source("run_CIDR.R")
+source("~/Documents/Spectrum/R/core_functions.R")
+source("~/Documents/Spectrum/R/kernel_functions.R")
+source("~/Documents/Spectrum/R/plotting_functions.R")
+source("~/Documents/Spectrum/R/spectrum.R")
+source("run_Ascend.R")
+source("run_CIDR.R")
+source("run_Monocle.R")
+source("run_pcaReduce.R")
+# source("run_RaceID3.R")
+source("run_Sincell.R")
+source("run_sscClust.R")
+source("run_TSCAN.R")
+source("run_SC3.R")
+source("run_Seurat.R")
+source("run_SIMLR.R")
+source("r_autoencoder.R")
+# source("multiple_kernel.R")
+library(splatter)
+# sourceCpp("test.cpp")
+# source("RaceID2_StemID_class.R")
+use_virtualenv("r-reticulate")
+# source_python("~/Documents/Clusterability/VASC/codes/vasc.py")
+```
+
+Shekar et al
+```{r}
+sce <- readRDS("../Data/Hard_Datasets/shekhar.rds")
+
+meta.data <- colData(sce)
+counts <- counts(sce)
+
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Klein et al PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# subsample dataset
+counts_sampled <- counts[, sample(ncol(counts), 20000)]
+
+clusters <- as.factor(meta.data$cell_type1[rownames(meta.data) %in% colnames(counts_sampled)])
+# trueLabels <- (meta.data$cell_type2[rownames(meta.data) %in% colnames(obj@Seurat$Scaled.Data)])
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts_sampled)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+gc()
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+gc()
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+gc()
+
+# compute transformations
+
+obj <- ComputeTransformations(obj)
+gc()
+obj <- ComputeTransformations(obj, method = "Scrna")
+gc()
+obj <- ComputeTransformations(obj, method = "SCTransform")
+gc()
+obj <- ComputeTransformations(obj, method = "All")
+
+# compute labels
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+
+t <- meta.data[colnames(obj@Data$cleaned), ]
+trueLabels <- t$cell_type2
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble <- apply(ensemble.mat, MARGIN = 2, as.cl_partition)
+cons <- cl_consensus(as.cl_ensemble(ensemble), method = "SE", control = list(nruns = 50))
+ensemble.labs <- c(cl_class_ids(cons))
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+Ensemble.Clusters <- as.factor(ensemble.labs)
+Multiview.Clusters <- as.factor(obj@Labels$All)
+
+evecs <- as.data.frame(obj@Scrna$Tsne.Data)
+p.evecs <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Ensemble.Clusters)) + 
+    labs(title = paste("Campbell et al Ensemble Clusters")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+p.multiview <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Multiview.Clusters)) + 
+    labs(title = paste("Campbell et al Multiview Clusters")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+```
+
+Macosko
+```{r}
+sce <- readRDS("../Data/Hard_Datasets/macosko.rds")
+
+meta.data <- colData(sce)
+counts <- counts(sce)
+
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Macosko et al PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# subsample dataset
+counts_sampled <- counts[, sample(ncol(counts), 20000)]
+
+clusters <- as.factor(meta.data$cell_type1[rownames(meta.data) %in% colnames(counts_sampled)])
+rm(sce, counts)
+gc()
+# run it through the pipeline
+obj <- CreateModalityObject(counts_sampled)
+rm(counts_sampled)
+gc()
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+gc()
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+gc()
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+gc()
+
+obj <- ComputeTransformations(obj)
+gc()
+obj <- ComputeTransformations(obj, method = "Scrna")
+gc()
+obj <- ComputeTransformations(obj, method = "SCTransform")
+gc()
+obj <- ComputeTransformations(obj, method = "All")
+
+# compute labels
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+
+t <- meta.data[colnames(obj@Data$cleaned), ]
+trueLabels <- t$cell_type1
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble <- apply(ensemble.mat, MARGIN = 2, as.cl_partition)
+cons <- cl_consensus(as.cl_ensemble(ensemble), method = "SE", control = list(nruns = 50))
+ensemble.labs <- c(cl_class_ids(cons))
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+Ensemble.Clusters <- as.factor(ensemble.labs)
+Multiview.Clusters <- as.factor(obj@Labels$All)
+
+evecs <- as.data.frame(obj@Scrna$Tsne.Data)
+p.evecs <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Ensemble.Clusters)) + 
+    labs(title = paste("Campbell et al Ensemble Clusters")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+p.multiview <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Multiview.Clusters)) + 
+    labs(title = paste("Campbell et al Multiview Clusters")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+```
+
+
+```{r}
+matrix_dir = "/home/elijah/Documents/Clusterability/Data/Large_Datasets/2020_Mar_FetalMaternal_Adult_Blood_10x/output/"
+
+barcode.path <- paste0(matrix_dir, "barcodes.tsv")
+features.path <- paste0(matrix_dir, "genes.tsv")
+matrix.path <- paste0(matrix_dir, "matrix.mtx")
+mat <- readMM(file = matrix.path)
+feature.names = read.delim(features.path, 
+                           header = FALSE,
+                           stringsAsFactors = FALSE)
+barcode.names = read.delim(barcode.path, 
+                           header = FALSE,
+                           stringsAsFactors = FALSE)
+colnames(mat) = barcode.names$V1
+rownames(mat) = feature.names$V1
+
+# expression_matrix <- Read10X(data.dir = matrix_dir)
+
+seurat_object = CreateSeuratObject(counts = round(mat), project = "Proj", min.cells = 5, min.features = 300)
+seurat_object[["percent.mt"]] <- Seurat::PercentageFeatureSet(seurat_object, pattern = "^mt-")
+# subset the data
+seurat_object <- subset(seurat_object, subset = nFeature_RNA > 0 & nFeature_RNA > 0 & percent.mt < 5)
+counts <- seurat_object@assays$RNA@counts
+
+meta.data <- fread("/home/elijah/Documents/Clusterability/Data/Large_Datasets/2020_Mar_FetalMaternal_Adult_Blood_10x/2020-Mar-FetalMaternal-Adult-Blood-10x_annotated_v1.scp.metadata.txt")
+meta.data <- meta.data[-1, ]
+
+obj <- CreateModalityObject(counts)
+
+obj <- PreprocessObject(obj,  nFeatures = 500)
+gc()
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+gc()
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+gc()
+
+obj <- ComputeTransformations(obj)
+obj <- ComputeTransformations(obj, method = "Scrna")
+obj <- ComputeTransformations(obj, method = "SCTransform")
+obj <- ComputeTransformations(obj, method = "All")
+
+gc()
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+obj <-TestModality(obj, type = "SCTransform")
+
+gc()
+Log <- as.data.frame(unlist(obj@Tests$Seurat$Dip))
+NegBinom <- as.data.frame(unlist(obj@Tests$SCTransform$Dip))
+Multinom <- as.data.frame(unlist(obj@Tests$Scrna$Dip))
+res.dip <- cbind(Log, Multinom, NegBinom)
+colnames(res.dip) <- c("Log", "Multinom", "NegBinom")
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+```
+
+
+ICA
+```{r}
+counts <- fread("/home/elijah/Documents/Clusterability/Data/Large_Datasets/ICA/pbmc_site_bc.scp.expr.txt", nThread = 11) %>% column_to_rownames(var = "GENE")
+meta.data <- fread("/home/elijah/Documents/Clusterability/Data/Large_Datasets/ICA/pbmc_cca_final_metadata_lineage1lineage2.txt")
+meta.data <- meta.data[-1, ]
+
+trueLabels <- meta.data$`AllCells - Primary Lineages`
+counts <- counts[, meta.data$NAME]
+obj <- CreateModalityObject(round(as.matrix(counts)))
+
+obj <- PreprocessObject(obj,  nFeatures = 500)
+gc()
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+gc()
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+gc()
+
+obj <- ComputeTransformations(obj)
+obj <- ComputeTransformations(obj, method = "Scrna")
+obj <- ComputeTransformations(obj, method = "SCTransform")
+obj <- ComputeTransformations(obj, method = "All")
+
+gc()
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+obj <-TestModality(obj, type = "SCTransform")
+
+gc()
+Log <- as.data.frame(unlist(obj@Tests$Seurat$Dip))
+NegBinom <- as.data.frame(unlist(obj@Tests$SCTransform$Dip))
+Multinom <- as.data.frame(unlist(obj@Tests$Scrna$Dip))
+res.dip <- cbind(Log, Multinom, NegBinom)
+colnames(res.dip) <- c("Log", "Multinom", "NegBinom")
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble <- apply(ensemble.mat, MARGIN = 2, as.cl_partition)
+cons <- cl_consensus(as.cl_ensemble(ensemble), method = "SE", control = list(nruns = 50))
+ensemble.labs <- c(cl_class_ids(cons))
+
+Clusters <- ensemble.labs
+Ensemble.Clusters <- as.factor(ensemble.labs)
+Multiview.Clusters <- as.factor(obj@Labels$All)
+
+evecs <- as.data.frame(obj@SCTransform$Tsne.Data)
+p.evecs <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Ensemble.Clusters)) + 
+    labs(title = paste("Ciucci et al Fig 1B Ensemble Clusters, alpha = 0.05")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+p.multiview <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Multiview.Clusters)) + 
+    labs(title = paste("Ciucci et al Fig 1B Multiview Clusters, alpha = 0.05")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+```
+

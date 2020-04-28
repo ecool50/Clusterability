@@ -1,0 +1,895 @@
+---
+title: "Modified Methods"
+author: "Elijah Willie"
+date: "18/01/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+gc()
+options(warn=-1)
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(reticulate)
+  library(splatter)
+  library(SingleCellExperiment)
+  library(ggplot2)
+  library(dplyr)
+  library(clue)
+  library(pcaReduce)
+  library(parallelDist)
+  library(data.table)
+  library(multiview)
+  library(cowplot)
+  library(diptest)
+  library(pheatmap)
+  library(ggplotify)
+  library(tidyverse)
+  library(agricolae)
+  library(Matrix)
+  library(Rcpp)
+  library(DuoClustering2018)
+  library(SIMLR)
+  library(pcurve)
+  }
+)
+# source required functions
+setwd("~/Documents/Clusterability/scripts/")
+source("Helper_Functions.R")
+source("~/Documents/scrna2019-master/algs/glmpca.R")
+source("~/Documents/scrna2019-master/util/functions.R")
+source("~/Documents/scrna2019-master/util/functions_genefilter.R")
+source("Pipeline_Functions.R")
+source("Clustering_Functions.R")
+source("func.R")
+source("Dip_Functions.R")
+source("consensus_funcs.R")
+source("Plot_Funcs.R")
+source("cpca_mod.R")
+source("cpc_eigen.R")
+source("run_CIDR.R")
+source("run_RaceID3.R")
+source("run_TSCAN.R")
+source("run_Ascend.R")
+source("run_Monocle.R")
+source("run_pcaReduce.R")
+source("run_Sincell.R")
+source("run_sscClust.R")
+source("Seurat_Mod.R")
+source("Ascend_Mod.R")
+source("SC3_Mod.R")
+source("run_sscClustMod.R")
+source("TSCAN_Mod.R")
+source("Monocle_Mod.R")
+source("~/Documents/Spectrum/R/core_functions.R")
+source("r_autoencoder.R")
+# sourceCpp("test.cpp")
+# source("RaceID2_StemID_class.R")
+use_virtualenv("r-reticulate")
+# source_python("~/Documents/Clusterability/VASC/codes/vasc.py")
+```
+
+# Gold Standard
+```{r}
+load("../Datasets/Sce_CellRanger.RData")
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$Truth))
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "Truth") + theme_grey() + ggtitle("Fretag et al Gold Standard PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# gene.names <- intersect(intersect(rownames(obj@Scrna$Deviances), rownames(obj@Seurat$Scaled.Data)), rownames(obj@SCTransform$Scaled.Data))
+
+# compute Distances
+# obj <- ComputeDistances(obj, genes = gene.names)
+# obj <- ComputeDistances(obj, method = "Scrna", genes = gene.names)
+# obj <- ComputeDistances(obj, method = "SCTransform", genes = gene.names)
+
+
+k.seurat <- EstimateK(obj)
+k.scrna <- EstimateK(obj, method = "Scrna")
+k.sct <- EstimateK(obj, method = "SCTransform")
+# k.randomly <- .estkTW(obj@Randomly$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+# compute transformations
+
+obj <- ComputeTransformations(obj)
+obj <- ComputeTransformations(obj, method = "Scrna")
+obj <- ComputeTransformations(obj, method = "SCTransform")
+obj <- ComputeTransformations(obj, method = "All")
+
+# run modality test
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+obj <-TestModality(obj, type = "SCTransform")
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+  
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+# k <- round(mean(colMaxs(ensemble.mat)))
+# tt <-table((colMaxs(ensemble.mat)))
+# k <- as.numeric(names(tt[which.max(tt)]))
+# k <- round(mean(colMaxs(ensemble.mat)))
+# con.mat <- diceR::consensus_matrix(ensemble.mat)
+# ensemble.labs <- cutree(hclust(as.dist(1 - con.mat), method = "ward.D2"), k)
+# ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemble <- apply(ensemble.mat, MARGIN = 2, as.cl_partition)
+cons <- cl_consensus(as.cl_ensemble(ensemble), method = "SE", control = list(nruns = 50))
+ensemble.labs <- c(cl_class_ids(cons))
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified tscan
+res.tscan <- run_TSCANMod(obj, trueLabels = trueLabels, k = length(unique(trueLabels)))
+
+# run modified monocle
+res.monocle <- run_monocle3Mod(obj = obj, trueLabels = trueLabels, k.final = k.final)
+
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.tscan), unlist(res.monocle), unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("TSCAN", "Monocle", "SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Freytag et al Gold Standard Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+# Silver 1
+```{r}
+load("../Datasets/Sce_Dataset1.RData")
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$Truth))
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "Truth") + theme_grey() + ggtitle("Freytag et al Silver 1 PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# gene.names <- intersect(intersect(rownames(obj@Scrna$Deviances), rownames(obj@Seurat$Scaled.Data)), rownames(obj@SCTransform$Scaled.Data))
+
+# compute Distances
+# obj <- ComputeDistances(obj, genes = gene.names)
+# obj <- ComputeDistances(obj, method = "Scrna", genes = gene.names)
+# obj <- ComputeDistances(obj, method = "SCTransform", genes = gene.names)
+
+
+k.seurat <- EstimateK(obj)
+k.scrna <- EstimateK(obj, method = "Scrna")
+k.sct <- EstimateK(obj, method = "SCTransform")
+# k.randomly <- .estkTW(obj@Randomly$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+# data <- as.matrix(obj@Data$cleaned)[gene.names, ]
+# k.final <- .estkTW(data)
+# compute transformations
+
+obj <- ComputeTransformations(obj, ncomp = k.seurat, sigma = 1)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.scrna, sigma = 1)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.sct, sigma = 1)
+obj <- ComputeTransformations(obj, method = "All", ncomp = max(k.seurat,k.scrna,k.sct), sigma = 1)
+
+# run modality test
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+obj <-TestModality(obj, type = "SCTransform")
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+# k <- max(ensemble.labs)
+# con.mat <- diceR::consensus_matrix(ensemble.mat)
+# ensemble.labs <- cutree(hclust(as.dist(1 - con.mat), method = "ward.D2"), k)
+ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified Ascend
+# res.ascend <- run_AscendMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Zeisel et al Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+
+# Zeisel
+```{r}
+sce <- readRDS("../Data/Benchmarks/Mouse/Brain/zeisel.rds")
+
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$cell_type1))
+zeisel.counts <- counts(sce)
+
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Zeisel et al PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+obj <- CreateModalityObject(zeisel.counts)
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+# 
+# obj <- ComputeDistances(obj)
+# obj <- ComputeDistances(obj, method = "Scrna")
+# obj <- ComputeDistances(obj, method = "SCTransform")
+
+k.seurat <- EstimateK(obj)
+k.scrna <- EstimateK(obj, method = "Scrna")
+k.sct <- EstimateK(obj, method = "SCTransform")
+# k.randomly <- .estkTW(obj@Randomly$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+
+# gene.names <- union(union(rownames(obj@Scrna$Deviances), rownames(obj@Seurat$Scaled.Data)), rownames(obj@Seurat$Scaled.Data))
+# data <- as.matrix(obj@Data$cleaned)[gene.names, ]
+# k.final <- .estkTW(data)
+
+# compute transformations
+obj <- ComputeTransformations(obj, ncomp = k.seurat)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.scrna)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.sct)
+
+obj <- TestModality(obj)
+obj <- TestModality(obj, type = "Scrna")
+obj <-TestModality(obj, type = "SCTransform")
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified tscan
+res.tscan <- run_TSCANMod(obj, trueLabels = trueLabels, k = length(unique(trueLabels)))
+
+# run modified monocle
+res.monocle <- run_monocle3Mod(obj = obj, trueLabels = trueLabels, k.final = k.final)
+
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.tscan), unlist(res.monocle), unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("TSCAN", "Monocle", "SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Zeisel et al Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+# Silver 2
+```{r}
+load("../Datasets/Sce_Dataset2.RData")
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$Truth))
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "Truth") + theme_grey() + ggtitle("Fretag et al Silver 2 PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# # compute Distances
+# obj <- ComputeDistances(obj)
+# obj <- ComputeDistances(obj, method = "Scrna")
+# obj <- ComputeDistances(obj, method = "SCTransform")
+
+k.seurat <- .estkTW(obj@Seurat$Scaled.Data)
+k.scrna <- .estkTW(obj@Scrna$Deviances)
+k.sct <- .estkTW(obj@SCTransform$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+# compute transformations
+
+obj <- ComputeTransformations(obj, ncomp = k.final, sigma = 1)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.final, sigma = 1)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.final, sigma = 1)
+obj <- ComputeTransformations(obj, method = "All", ncomp = max(k.seurat,k.scrna,k.sct), sigma = 1)
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified Ascend
+# res.ascend <- run_AscendMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Fretag et al Silver 2 Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+# Silver 3
+```{r}
+load("../Datasets/Sce_Dataset3.RData")
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$Truth))
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "Truth") + theme_grey() + ggtitle("Fretag et al Silver 3 PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+
+obj <- ComputeTransformations(obj, ncomp = k.seurat, sigma = 1)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.scrna, sigma = 1)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.sct, sigma = 1)
+# obj <- ComputeTransformations(obj, method = "All", ncomp = max(k.seurat,k.scrna,k.sct), sigma = 1)
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform, obj@Labels$All)
+ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.seurat, ncomp.scrna = k.scrna, ncomp.sct = k.sct)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified Ascend
+res.ascend <- run_AscendMod(obj, truelabels = trueLabels, ncomp.seurat = k.seurat, ncomp.scrna = k.scrna, ncomp.sct = k.sct)
+
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.seurat, ncomp.scrna = k.scrna, ncomp.sct = k.sct,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.ascend), unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("Ascend", "SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Fretag et al Silver 3 Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+
+# Segerstolpe
+```{r}
+sce <- readRDS("../Data/Hard_Datasets/segerstolpe.rds")
+
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$cell_type1))
+
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Segerstolpe et al PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# compute Distances
+# obj <- ComputeDistances(obj)
+# obj <- ComputeDistances(obj, method = "Scrna")
+# obj <- ComputeDistances(obj, method = "SCTransform")
+
+
+k.seurat <- EstimateK(obj)
+k.scrna <- EstimateK(obj, method = "Scrna")
+k.sct <- EstimateK(obj, method = "SCTransform")
+# k.randomly <- .estkTW(obj@Randomly$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+# compute transformations
+
+obj <- ComputeTransformations(obj, ncomp = k.seurat)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.scrna)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.sct)
+# obj <- ComputeTransformations(obj, method = "All", ncomp = max(k.seurat,k.scrna,k.sct), sigma = 1)
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+# obj <- .RunConsensus(obj, method = "All")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+# all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified tscan
+res.tscan <- run_TSCANMod(obj, trueLabels = trueLabels, k = length(unique(trueLabels)))
+
+# run modified monocle
+res.monocle <- run_monocle3Mod(obj = obj, trueLabels = trueLabels, k.final = k.final)
+
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.tscan), unlist(res.monocle), unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("TSCAN", "Monocle", "SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Segerstolpe Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+
+# Baron Human
+```{r}
+sce <- readRDS("../Data/Hard_Datasets/baron-human.rds")
+
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$cell_type1))
+
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Baron et al Human PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# compute Distances
+# obj <- ComputeDistances(obj)
+# obj <- ComputeDistances(obj, method = "Scrna")
+# obj <- ComputeDistances(obj, method = "SCTransform")
+
+
+k.seurat <- EstimateK(obj)
+k.scrna <- EstimateK(obj, method = "Scrna")
+k.sct <- EstimateK(obj, method = "SCTransform")
+# k.randomly <- .estkTW(obj@Randomly$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+# compute transformations
+obj <- ComputeTransformations(obj, ncomp = k.seurat)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.scrna)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.sct)
+# obj <- ComputeTransformations(obj, method = "All", sigma = 1, ncomp = k.final, hidden_dims = 500)
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+# obj <- .RunConsensus(obj, method = "All")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+# all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble <- apply(ensemble.mat, MARGIN = 2, as.cl_partition)
+cons <- cl_consensus(as.cl_ensemble(ensemble), method = "SE", control = list(nruns = 50))
+ensemble.labs <- c(cl_class_ids(cons))
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+gc()
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+gc()
+# run modified tscan
+res.tscan <- run_TSCANMod(obj, trueLabels = trueLabels, k = length(unique(trueLabels)))
+gc()
+# run modified monocle
+res.monocle <- run_monocle3Mod(obj = obj, trueLabels = trueLabels, k.final = k.final)
+gc()
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+gc()
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.tscan), unlist(res.monocle), unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("TSCAN", "Monocle", "SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Baron et al Human Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+# Klien
+```{r}
+sce <- readRDS("../Data/Hard_Datasets/klein.rds")
+
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$cell_type1))
+
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Klein et al PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# compute Distances
+obj <- ComputeDistances(obj)
+obj <- ComputeDistances(obj, method = "Scrna")
+obj <- ComputeDistances(obj, method = "SCTransform")
+
+k.seurat <- .estkTW(obj@Seurat$Scaled.Data)
+k.scrna <- .estkTW(obj@Scrna$Deviances)
+k.sct <- .estkTW(obj@SCTransform$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+# compute transformations
+obj <- ComputeTransformations(obj, ncomp = k.final, sigma = 1, hidden_dims = 1000)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.final, sigma = 1, hidden_dims = 1000)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.final, sigma = 1, hidden_dims = 1000)
+obj <- ComputeTransformations(obj, method = "All", sigma = 1, ncomp = k.final, hidden_dims = 1000)
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+obj <- .RunConsensus(obj, method = "All")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified tscan
+res.tscan <- run_TSCANMod(obj, trueLabels = trueLabels, k = length(unique(trueLabels)))
+
+# run modified monocle
+res.monocle <- run_monocle3Mod(obj = obj, trueLabels = trueLabels, k.final = k.final)
+
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.tscan), unlist(res.monocle), unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("TSCAN", "Monocle", "SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Klein et al Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+# Marques
+```{r}
+sce <- readRDS("../Data/Hard_Datasets/marques.rds")
+
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Marques et al PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$cell_type1))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+k.seurat <- EstimateK(obj)
+k.scrna <- EstimateK(obj, method = "Scrna")
+k.sct <- EstimateK(obj, method = "SCTransform")
+# k.randomly <- .estkTW(obj@Randomly$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+# compute transformations
+obj <- ComputeTransformations(obj, ncomp = k.seurat)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.scrna)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.sct)
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+# obj <- .RunConsensus(obj, method = "All")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+# all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified tscan
+res.tscan <- run_TSCANMod(obj, trueLabels = trueLabels, k = length(unique(trueLabels)))
+
+# run modified monocle
+res.monocle <- run_monocle3Mod(obj = obj, trueLabels = trueLabels, k.final = k.final)
+
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.tscan), unlist(res.monocle), unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("TSCAN", "Monocle", "SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Marques et al Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
+# Baron Human
+```{r}
+sce <- readRDS("../Data/Hard_Datasets/baron-human.rds")
+
+meta.data <- colData(sce)
+trueLabels <- as.numeric(as.factor(meta.data$cell_type1))
+
+sce <- scater::normalize(sce)
+p.pca <- scater::plotPCA(sce, colour_by = "cell_type1") + theme_grey() + ggtitle("Baron et al Human PCA Plot") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
+
+# run it through the pipeline
+obj <- CreateModalityObject(counts(sce))
+# add the seurat slot
+obj <- PreprocessObject(obj,  nFeatures = 500)
+# add the sctransform slot
+obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
+# add the scrna slot
+obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
+
+# compute Distances
+obj <- ComputeDistances(obj)
+obj <- ComputeDistances(obj, method = "Scrna")
+obj <- ComputeDistances(obj, method = "SCTransform")
+
+k.seurat <- .estkTW(obj@Seurat$Scaled.Data)
+k.scrna <- .estkTW(obj@Scrna$Deviances)
+k.sct <- .estkTW(obj@SCTransform$Scaled.Data)
+k.final <- max(k.seurat, k.scrna, k.sct)
+# compute transformations
+obj <- ComputeTransformations(obj, ncomp = k.final, sigma = 1)
+obj <- ComputeTransformations(obj, method = "Scrna", ncomp = k.final, sigma = 1)
+obj <- ComputeTransformations(obj, method = "SCTransform", ncomp = k.final, sigma = 1)
+
+obj <- .RunConsensus(obj)
+obj <- .RunConsensus(obj, method = "Scrna")
+obj <- .RunConsensus(obj, method = "SCTransform")
+# obj <- .RunConsensus(obj, method = "All")
+
+seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
+scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
+sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
+# all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
+
+ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
+ensemble <- apply(ensemble.mat, MARGIN = 2, as.cl_partition)
+cons <- cl_consensus(as.cl_ensemble(ensemble), method = "SE", control = list(nruns = 50))
+ensemble.labs <- c(cl_class_ids(cons))
+ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
+
+res <- list(Seurat = seurat.rand, Scrna = scrna.rand, SCT = sct.rand, Ensemble = ensemle.rand)
+
+# run modified Seurat
+res.seurat <- run_SeuratMod(obj, trueLabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final)
+
+# run modified SC3
+res.sc3 <- run_SC3Mod(obj, trueLabels = trueLabels)
+
+# run modified tscan
+res.tscan <- run_TSCANMod(obj, trueLabels = trueLabels, k = length(unique(trueLabels)))
+
+# run modified monocle
+res.monocle <- run_monocle3Mod(obj = obj, trueLabels = trueLabels, k.final = k.final)
+
+# run modified sscClust
+res.sscClust <- Run_sscClustMod(obj, truelabels = trueLabels, ncomp.seurat = k.final, ncomp.scrna = k.final, ncomp.sct = k.final,
+                                  k = length(unique(trueLabels)))
+
+# plot the results
+rand.mat <- as.data.frame(cbind(unlist(res.tscan), unlist(res.monocle), unlist(res.sc3), unlist(res.seurat), unlist(res.sscClust), unlist(res)))
+colnames(rand.mat) <- c("TSCAN", "Monocle", "SC3", "Seurat", "sscClust", "Custom")
+rownames(rand.mat) <- c("Log", "Multinomial", "Neg Binom", "Ensemble")
+rand.mat <- setDT(rand.mat, keep.rownames = T)[]
+rand.mat.melted <- melt(rand.mat, id.vars = "rn")
+colnames(rand.mat.melted) <- c("Model", "Method", "ARI")
+
+p.bar <- rand.mat.melted %>% 
+  dplyr::mutate(Custom = ifelse(Method == 'Custom',  T, F)) %>% 
+  ggplot(aes(Method, ARI)) + geom_bar(stat="identity", aes(fill=Custom)) + labs(title = "Baron et al Human Modified") + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90)) +
+  facet_grid(. ~ Model)
+```
+
