@@ -301,14 +301,13 @@ clusterlab <- function(centers=1,r=8,sdvec=NULL,alphas=NULL,centralcluster=FALSE
               axis.text.x = element_text(size = pcafontsize, colour = 'black'),
               axis.title.x = element_text(size = pcafontsize),
               axis.title.y = element_text(size = pcafontsize))
-      print(p)
     }
     mydata <- data.frame(t(mydata))
     colnames(mydata) <- identitymatrix$sampleID
     
     message('finished.')
     
-    newlist <- list('synthetic_data' = mydata, 'identity_matrix' = identitymatrix)
+    newlist <- list('synthetic_data' = mydata, 'identity_matrix' = identitymatrix, plot = p)
     
     return(newlist)
     

@@ -170,7 +170,7 @@
   if(method == "Seurat"){
     # for Cosine
     message("Cosine....")
-    eucl.eigen.labs <- .ConsensusTest(obj@Transformations$Seurat$Cosine$Eigen)
+    eucl.eigen.labs <- .ConsensusTest(obj@Transformations$Seurat$Cosine$Eigen)$labels
     if(length(unique(eucl.eigen.labs)) > 1){
       ensemble.mat <- cbind(ensemble.mat, eucl.eigen.labs)
     }
@@ -193,7 +193,7 @@
   } else if(method == "SCTransform"){
     # for Cosine
     message("Cosine....")
-    eucl.eigen.labs <- .ConsensusTest(obj@Transformations$SCTransform$Cosine$Eigen)
+    eucl.eigen.labs <- .ConsensusTest(obj@Transformations$SCTransform$Cosine$Eigen)$labels
     if(length(unique(eucl.eigen.labs)) > 1){
       ensemble.mat <- cbind(ensemble.mat, eucl.eigen.labs)
     }
@@ -216,7 +216,7 @@
     # for Cosine
     message("Cosine....")
 
-    eucl.eigen.labs <- .ConsensusTest(obj@Transformations$Scrna$Cosine$Eigen)
+    eucl.eigen.labs <- .ConsensusTest(obj@Transformations$Scrna$Cosine$Eigen)$labels
     if(length(unique(eucl.eigen.labs)) > 1){
       ensemble.mat <- cbind(ensemble.mat, eucl.eigen.labs)
     }
@@ -236,7 +236,7 @@
     # return the labels
     obj@Labels$Scrna <- ensemble.labs
   } else if(method == "All"){
-    all.eigen.labs <- .ConsensusTest(as.matrix(obj@Transformations$All$PCA))
+    all.eigen.labs <- .ConsensusTest(as.matrix(obj@Transformations$All$PCA))$labels
     
     obj@Labels$All <- all.eigen.labs
   }
@@ -245,7 +245,112 @@
   
 }
 
-.ConsensusTest <- function(x, alpha = 0.001, nboot = 10, nmin = 10, seed = 1994, retTree = F, method = "dc"){
+
+CI<-function(x,cluster){
+  wcss.feature <- numeric(ncol(x))
+  for (k in unique(cluster)) {
+    indices <- (cluster == k)
+    if (sum(indices) > 1)
+      wcss.feature <- wcss.feature + apply(scale(x[indices,], center = TRUE, scale = FALSE)^2, 2, sum)
+  }
+  wcss = sum(wcss.feature)
+  Tss=sum(apply(scale(x, center = TRUE, scale = FALSE)^2, 2, sum))
+  wcss/Tss
+}
+
+
+
+plotFisher <- function(fisher.res, dat, k, pval){
+  
+  dat <- as.data.frame(dat)
+  colnames(dat) <- c("Dim1", 'Dim2')
+  labels <- as.factor(fisher.res$labels)
+  p.fisher <- ggplot(dat, aes(x=Dim1,y=Dim2)) + geom_point(aes(color = labels)) + 
+    geom_abline(aes(intercept = fisher.res$intercept, slope = fisher.res$slope)) +
+    ggtitle(paste("Discriminant at Node: ", k)) +
+    theme(plot.title = element_text(hjust = 0.5, size=15), axis.title=element_text(size=14))
+  
+  
+  
+  r <- density(fisher.res$proj)
+  ## determine range of density plot
+  xmin <- min(r$x)
+  ymax <- max(r$y)
+  ## create df with plotting points
+  kci_df <- data.frame(x=fisher.res$proj, y=runif(length(fisher.res$proj), ymax*1/4, ymax*3/4))
+  
+  
+  df <- data.frame(x=r$x, y=r$y)
+  p.density <- kci_df %>% ggplot(aes(x,y)) + geom_point(alpha=1/2, size=1, color="#377eb8") + 
+    geom_path(aes(x=x, y=y), data=df, color="#e41a1c", size=1) + 
+    xlab("Fischer Projection") + ylab("Density") + 
+    ggtitle(paste("Dip pval = ", round(pval,4))) + 
+    theme(plot.title = element_text(hjust = 0.5, size=15), axis.title=element_text(size=14))
+  
+  plot_list <- list(disc = p.fisher, dens = p.density)
+  return(plot_list)
+}
+
+
+
+plotDend <- function(dend, k, labs){
+  dend_t <- dend %>% set("by_labels_branches_col", value = labs)
+  
+  p.dend <- as.ggplot(function()plot(dend_t, main = paste("Subtree at Node: ", k), leaflab = "none"))
+  
+  return(p.dend)
+}
+
+plotCI <- function(ci.true, ci.sim, k, labs, dat){
+  ## fit density to cluster indices
+  den_pv <- density(ci.sim)
+  den_df <- data.frame(x=den_pv$x, y=den_pv$y)
+  
+  ## determine range of density plot
+  xmin <- min(den_df$x)
+  ymax <- max(den_df$y)
+  
+  mindex <- mean(ci.sim)
+  sindex <- sd(ci.sim)
+  
+  kp_emp <- sum(ci.true>ci.sim) / length(ci.sim)
+  kp_norm <- pnorm((ci.true-mean(ci.sim))/sd(ci.sim))
+  
+  
+  ## create df with plotting points
+  kci_df <- data.frame(x=ci.sim, y=runif(length(ci.sim), ymax*1/4, ymax*3/4))
+  
+  ## plot data kde and best fit gaussian
+  gp <- ggplot(kci_df) +
+    geom_point(aes(x=x, y=y), alpha=1/2, size=1, color="#377eb8") +
+    geom_path(aes(x=x, y=y), data=den_df, color="#e41a1c", size=1) + 
+    stat_function(fun=dnorm, args=list(mean=mindex, sd=sindex),
+                  color="black", size=1, n=500) +
+    geom_vline(xintercept=ci.true, color="#4daf4a", size=1) + 
+    ylab("density") + xlab("Cluster Index") + 
+    ggtitle(paste0("Node: ", k)) + 
+    theme(plot.title = element_text(hjust = 0.5, size=15), axis.title=element_text(size=14))  +
+    scale_x_continuous(expand=c(0.01, 0)) +
+    scale_y_continuous(expand=c(0.01, 0))
+  
+  ## return p-values
+  gp <- gp +
+    annotate(geom="text", x=min(xmin, ci.true), y=ymax*.98, vjust=1, hjust=0,
+             label=paste0(" p-value emp = ", round(kp_emp, 3), "\n",
+                          " p-value norm = ", round(kp_norm, 3)))
+  
+  dat <- as.data.frame(dat)
+  colnames(dat) <- c("Dim1", 'Dim2')
+  labels <- as.factor(labs)
+  p.clust <- ggplot(dat, aes(x=Dim1,y=Dim2)) + geom_point(aes(color = labels)) + 
+    ggtitle(paste("Clusters at Node: ", k)) +
+    theme(plot.title = element_text(hjust = 0.5, size=15), axis.title=element_text(size=14))
+  return(list(dens = gp, clusters = p.clust))
+}
+
+
+
+.ConsensusTest <- function(x, method = "Discriminant", alpha = 0.05, pdat, nboot = 10, nmin = 10, seed = 1994, plot = F){
   set.seed(seed)
   n <- nrow(x)
   p <- ncol(x)
@@ -258,6 +363,8 @@
   # Generate initial tree
   d <- parallelDist(scale(x), method = "euclidean")
   output <- fastcluster::hclust(d, method = "ward.D2")
+  library(dendextend)
+  dend <- as.dendrogram(output)
   
   # do some processing
   hc_dat <- output
@@ -269,8 +376,11 @@
   
 
   # run significance testing on each node
+  plot_list <- list()
+  t <- 1
   for (k in 1:(n-1)) {
     ## indices for subtree
+    idx_vals <- idx_hc[k, ]
     idx_sub <- unlist(idx_hc[k, ])
     n_sub <- length(idx_sub)
     
@@ -287,13 +397,57 @@
     }
     
     # Generate initial assingments
-    assignments <- kmeans(as.matrix(x[idx_sub, ]), 2, nstart = 25, iter.max = 100)$cluster
-    res.pval <- UNPaC::UNPaC_Copula(x[idx_sub, ], assignments, kmeans, nsim = nboot, cov = "glasso")$pvalue_norm
+    x1 <- x[idx_vals[[1]], ]
+    x2 <- x[idx_vals[[2]], ]
+    x_comb <- rbind(x1,x2)
+    # x_comb <- lfda::kmatrixGauss(x_comb)
+    assignments <- c(rep(1,nrow(x1)), rep(2, nrow(x2)))
+    
+    
+    # Compute the pvalues
+    if(method == "Discriminant"){
+      x_new <- fpc::discrcoord(x=x_comb, clvecd = assignments)$proj[, 1]
+      res.pval <- dip.test(x_new)$p.value
+    } else if(method == "Significance"){
+      res <- UNPaC::UNPaC_Copula(x[idx_sub, ], assignments, kmeans, nsim = nboot, cov = "glasso")
+      test.ci <- CI(x[idx_sub, ], assignments)
+      null.ci <- res$sim_CI
+      res.pval <- res$pvalue_emp
+    }
+    
+
+    # assignments <- kmeans(as.matrix(x[idx_sub, ]), 2, nstart = 25, iter.max = 100)$cluster
+    # assignments <- cutree(hclust(parallelDist(x[idx_sub, ]), method = "ward.D2"), 2)
+    # x_new <- lfda::lfda(x=x_comb, r = 1, y=assignments, metric = "plain")$Z
+    # x_new <- ComputeFisher(x_comb = x_comb, assignments = assignments)$proj
     print(res.pval)
     
+    # update results
     if(alpha < 1){
-      nd_type[k] <- ifelse(res.pval < cutoff[k],
-                           "sig", "not_sig")
+      if(res.pval <  cutoff[k] ){
+        nd_type[k] <- "sig"
+        if(plot){
+          x1 <- pdat[idx_vals[[1]], ]
+          x2 <- pdat[idx_vals[[2]], ]
+          pdat_comb <- rbind(x1,x2)
+          labs <- rownames(pdat_comb)
+          p.dend <- plotDend(dend, k, labs)
+          if(method == "Discriminant"){
+            res <- ComputeFisher(x_comb = pdat_comb[,1:2], assignments = assignments)
+            p.fisher <- plotFisher(res, pdat_comb[,1:2], k = k, pval = res.pval)
+            p.final <- plot_grid(p.dend, p.fisher$disc, p.fisher$dens, ncol = 3, labels = c("A", "B", "C"))
+          } else if(method == "Significance"){
+            p.ci <- plotCI(test.ci, null.ci, k = k, labs = assignments, dat = pdat_comb[, 1:2])
+            p.final <- plot_grid(p.dend, p.ci$clusters, p.ci$dens, ncol = 3, labels = c("A", "B", "C"))
+            
+          }
+          plot_list[[t]] <- p.final
+        }
+        t <- t+1
+        
+      } else{
+        nd_type[k] <- "not_sig"
+      }
       p_emp[k] <- res.pval
     }
     
@@ -309,11 +463,13 @@
   # get the labels
   res.labels <- .MultiCutTRee(res)
   
-  if(retTree){
-    return(list(Tree = res, Labels = res.labels))
+  if(plot){
+    return(list(labels = res.labels, Tree = res, plots = plot_list))
+  } else{
+    return(list(labels = res.labels, Tree = res))
   }
-
-  return(res.labels)
+  
+  
   
 }
 

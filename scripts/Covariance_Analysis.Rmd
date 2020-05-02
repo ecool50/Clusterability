@@ -30,7 +30,6 @@ suppressPackageStartupMessages({
   library(pheatmap)
   library(ggplotify)
   library(tidyverse)
-  library(agricolae)
   library(aricode)
   library(Matrix)
   library(Rcpp)
@@ -38,6 +37,7 @@ suppressPackageStartupMessages({
   library(ggrepel)
   library(pcurve)
   library(fpc)
+  library(dendextend)
   # library(Rfast)
   }
 )
@@ -80,6 +80,7 @@ source("Simulation_Setup.R")
 source("cpca_mod.R")
 source("stepwisecpc.R")
 source("clusterlab.R")
+source("Fisher_Discriminant.R")
 # source("UnPac_Mod.R")
 # source("Silverman_Mod.R")
 library(splatter)
@@ -368,8 +369,8 @@ obj <- .RunConsensus(obj, method = "Scrna")
 obj <- .RunConsensus(obj, method = "SCTransform")
 obj <- .RunConsensus(obj, method = "All")
 # 
-# t <- meta.data[colnames(obj@Data$cleaned), ]
-# trueLabels <- t$cell_type2
+t <- meta.data[colnames(obj@Data$cleaned), ]
+trueLabels <- t$cell_type1
 
 seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
 scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
@@ -596,8 +597,8 @@ obj <- .RunConsensus(obj, method = "Scrna")
 obj <- .RunConsensus(obj, method = "SCTransform")
 obj <- .RunConsensus(obj, method = "All")
 # 
-# t <- meta.data[colnames(obj@Data$cleaned), ]
-# trueLabels <- t$cell_type2
+t <- meta.data[colnames(obj@Data$cleaned), ]
+trueLabels <- t$cell_type1
 
 seurat.rand <- adjustedRandIndex(trueLabels, obj@Labels$Seurat)
 scrna.rand <- adjustedRandIndex(trueLabels, obj@Labels$Scrna)
@@ -875,7 +876,9 @@ sct.rand <- adjustedRandIndex(trueLabels, obj@Labels$SCTransform)
 all.rand <- adjustedRandIndex(trueLabels, obj@Labels$All)
 
 ensemble.mat <- cbind(obj@Labels$Seurat, obj@Labels$Scrna, obj@Labels$SCTransform)
-ensemble.labs <- diceR::LCA(ensemble.mat)
+ensemble <- apply(ensemble.mat, MARGIN = 2, as.cl_partition)
+cons <- cl_consensus(as.cl_ensemble(ensemble), method = "SE", control = list(nruns = 50))
+ensemble.labs <- c(cl_class_ids(cons))
 ensemle.rand <- adjustedRandIndex(trueLabels, ensemble.labs)
 ```
 

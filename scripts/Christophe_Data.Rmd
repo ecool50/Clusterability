@@ -141,11 +141,11 @@ Clusters <- ensemble.labs
 Ensemble.Clusters <- as.factor(ensemble.labs)
 Multiview.Clusters <- as.factor(obj@Labels$All)
 
-evecs <- as.data.frame(obj@SCTransform$Tsne.Data)
-p.evecs <- ggplot(evecs) + geom_point(aes(x = tSNE_1, y = tSNE_2, color = Ensemble.Clusters)) + 
+evecs <- as.data.frame(obj@SCTransform$Sig.PCs.Data)
+p.evecs <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Ensemble.Clusters)) + 
     labs(title = paste("Ciucci et al Fig 1B Ensemble Clusters, alpha = 0.05")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
 
-p.multiview <- ggplot(evecs) + geom_point(aes(x = tSNE_1, y = tSNE_2, color = Multiview.Clusters)) + 
+p.multiview <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Multiview.Clusters)) + 
     labs(title = paste("Ciucci et al Fig 1B Multiview Clusters, alpha = 0.05")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
 
 obj <- Seurat::NormalizeData(object = seurat_object, normalization.method = "LogNormalize", scale.factor = 10000)
@@ -185,6 +185,8 @@ obj <- PreprocessObject(obj,  method = "SCTransform", nFeatures = 500)
 # add the scrna slot
 obj <- PreprocessObject(obj, method = "Scrna", nFeatures = 500)
 
+tsne.res <- as.matrix(Rtsne::Rtsne(obj@Scrna$Sig.PCs.Data, perplexity=30, verbose=F, max_iter = 500, pca = F,
+                                       normalize = T, check_duplicates=FALSE, num_threads = 0)$Y)
 # compute Distances
 # obj <- ComputeDistances(obj)
 # obj <- ComputeDistances(obj, method = "Scrna")
@@ -230,12 +232,12 @@ p.dip <- ggplotify::as.ggplot(obj.heatmap)
 Ensemble.Clusters <- as.factor(ensemble.labs)
 Multiview.Clusters <- as.factor(obj@Labels$All)
 
-evecs <- as.data.frame(obj@Seurat$Sig.PCs.Data)
-colnames(evecs) <- c("PC1", "PC2")
+evecs <- as.data.frame(tsne.res)
+# colnames(evecs) <- c("PC1", "PC2")
 p.evecs <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Ensemble.Clusters)) + 
     labs(title = paste("Arazi et al Fig 4 Ensemble Clusters, alpha = 0.05")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
 
-p.multiview <- ggplot(evecs) + geom_point(aes(x = PC1, y = PC2, color = Multiview.Clusters)) + 
+p.multiview <- ggplot(evecs) + geom_point(aes(x = V1, y = V2, color = Multiview.Clusters)) + 
     labs(title = paste("Freytag et al Gold Standard Multiview Clusters")) + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 90))
 
 # obj <- Seurat::NormalizeData(object = obj@Seurat$obj, normalization.method = "LogNormalize", scale.factor = 10000)

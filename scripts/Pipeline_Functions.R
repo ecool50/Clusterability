@@ -38,12 +38,12 @@ PreprocessObject <- function(object, method = "Seurat", nPCs = 100, nFeatures = 
     
     message("\nRunning Log Preprocessing\n")
     # create the seurat object
-    obj <- Seurat::CreateSeuratObject(counts = object@Data$counts, project = "Proj", min.cells = 0, min.features = 0)
+    obj <- Seurat::CreateSeuratObject(counts = object@Data$counts, project = "Proj", min.cells = 5, min.features = 200)
     
     # compute % mitohondrial genes
     obj[["percent.mt"]] <- Seurat::PercentageFeatureSet(obj, pattern = "^mt-")
     # subset the data
-    obj <- subset(obj, subset = nFeature_RNA > 0 & nFeature_RNA > 0 & percent.mt < 5)
+    obj <- subset(obj, subset = nFeature_RNA > 0 & percent.mt < 5)
     cleaned_data <- as.matrix(obj@assays$RNA@data)
     
     # normalize and scale the data
@@ -80,10 +80,11 @@ PreprocessObject <- function(object, method = "Seurat", nPCs = 100, nFeatures = 
     
     
     # Run Tsne
-    # message("\nRunning Tsne")
-    # # obj <- Seurat::RunTSNE(obj, dims = 1:nPCs, check_duplicates=FALSE)
-    # tsne.res <- as.matrix(Rtsne::Rtsne(t(scaled_data), perplexity=30, verbose=F, max_iter = 500, pca = T, 
-    #                                    normalize = T, check_duplicates=FALSE, num_threads = 0)$Y)
+    message("\nRunning Tsne")
+    # obj <- Seurat::RunTSNE(obj, dims = 1:nPCs, check_duplicates=FALSE)
+    tsne.res <- as.matrix(Rtsne::Rtsne(t(scaled_data), perplexity=30, verbose=F, max_iter = 500, pca = T,
+                                       normalize = T, check_duplicates=FALSE, num_threads = 0)$Y)
+    rownames(tsne.res) <- colnames(scaled_data)
     # 
     # # Run UMAP
     # message("\nRunning UMAP")
@@ -99,7 +100,7 @@ PreprocessObject <- function(object, method = "Seurat", nPCs = 100, nFeatures = 
     object@Data$cleaned <- Matrix(cleaned_data, sparse = TRUE)
     object@Seurat$Scaled.Data <- Matrix(scaled_data, sparse = TRUE)
     object@Seurat$Sig.PCs.Data <- sig_pcs_data
-    # object@Seurat$Tsne.Data <- tsne.res
+    object@Seurat$Tsne.Data <- tsne.res
     # object@Seurat$Umap.Data <- umap.res
     # # object@Seurat$Autoencoder <- dat.encoded
     # # object@Seurat$Princurve <- fit
@@ -146,9 +147,10 @@ PreprocessObject <- function(object, method = "Seurat", nPCs = 100, nFeatures = 
       sig_pcs_data <-  .SigPCs(scaled_data, B = 50)$sigVecs
     }
     # Run Tsne
-    # message("\nRunning Tsne")
-    # tsne.res <- as.matrix(Rtsne::Rtsne(t(scaled_data), perplexity=30, verbose=F, max_iter = 500, pca = T, 
-    #                                    normalize = T, check_duplicates=FALSE, num_threads = 0)$Y)
+    message("\nRunning Tsne")
+    tsne.res <- as.data.frame(Rtsne::Rtsne(t(scaled_data), perplexity=30, verbose=F, max_iter = 500, pca = T,
+                                       normalize = T, check_duplicates=FALSE, num_threads = 0)$Y)
+    rownames(tsne.res) <- colnames(scaled_data)
     # 
     # # Run UMAP
     # message("\nRunning UMAP")
@@ -162,7 +164,7 @@ PreprocessObject <- function(object, method = "Seurat", nPCs = 100, nFeatures = 
     # update the object and return it
     object@SCTransform$Scaled.Data <- Matrix(scaled_data, sparse = TRUE)
     object@SCTransform$Sig.PCs.Data <- sig_pcs_data
-    # object@SCTransform$Tsne.Data <- tsne.res
+    object@SCTransform$Tsne.Data <- tsne.res
     # object@SCTransform$Umap.Data <- umap.res
     # object@SCTransform$Autoencoder <- dat.encoded
     # object@SCTransform$Princurve <- fit
@@ -213,9 +215,10 @@ PreprocessObject <- function(object, method = "Seurat", nPCs = 100, nFeatures = 
     # obj_PCA <- scry::GLMPCA(as.matrix(counts_filtered), L = nPCs, fam = "mult", verbose = TRUE, ctl = list(maxIter = 100, eps = 1e-04))
     
     # Run Tsne
-    # message("\nRunning Tsne")
-    # tsne.res <- as.matrix(Rtsne::Rtsne(t(obj_resids), perplexity=30, verbose=F, max_iter = 500, pca = T, 
-    #                                    normalize = T, check_duplicates=FALSE, num_threads = 0)$Y)
+    message("\nRunning Tsne")
+    tsne.res <- as.matrix(Rtsne::Rtsne(t(obj_resids), perplexity=30, verbose=F, max_iter = 500, pca = T,
+                                       normalize = T, check_duplicates=FALSE, num_threads = 0)$Y)
+    rownames(tsne.res) <- colnames(obj_resids)
     # 
     # # Run UMAP
     # message("\nRunning UMAP")
@@ -230,7 +233,7 @@ PreprocessObject <- function(object, method = "Seurat", nPCs = 100, nFeatures = 
     #update the object and return it
     object@Scrna$Deviances <- Matrix(obj_resids, sparse = TRUE)
     object@Scrna$Sig.PCs.Data <- sig_pcs_data
-    # object@Scrna$Tsne.Data <- tsne.res
+    object@Scrna$Tsne.Data <- tsne.res
     # object@Scrna$Umap.Data <- umap.res
     # object@Scrna$Autoencoder <- dat.encoded
     # object@Scrna$Princurve <- fit
@@ -469,6 +472,8 @@ ComputeTransformations <- function(obj, method = "Seurat"){
     ncomp <- dim(obj@Seurat$Sig.PCs.Data)[2]
     ncomp <- min(ncomp,10)
     tpca <- irlba::prcomp_irlba(dcos, n = max(2, ncomp), center = T, scale. = T)$rotation
+    # tpca <- RSpectra::eigs_sym(dcos, k = ncomp)$vectors
+    rownames(tpca) <- colnames(obj@Seurat$Scaled.Data)
     obj@Transformations$Seurat$Cosine <- list(Eigen = tpca)
     
     } else if(method == "SCTransform"){
@@ -483,7 +488,9 @@ ComputeTransformations <- function(obj, method = "Seurat"){
       # ncomp <- round(intrinsicDimension::maxLikGlobalDimEst(x, unbiased = TRUE, k = 15)$dim.est)
       ncomp <- dim(obj@Seurat$Sig.PCs.Data)[2]
       ncomp <- min(ncomp,10)
+      # tpca <- RSpectra::eigs_sym(dcos, k = ncomp)$vectors
       tpca <- irlba::prcomp_irlba(dcos, n = max(2, ncomp), center = T, scale. = T)$rotation
+      rownames(tpca) <- colnames(obj@SCTransform$Scaled.Data)
       obj@Transformations$SCTransform$Cosine <- list(Eigen = tpca)
       gc()
   
@@ -501,6 +508,8 @@ ComputeTransformations <- function(obj, method = "Seurat"){
       ncomp <- dim(obj@Seurat$Sig.PCs.Data)[2]
       ncomp <- min(ncomp,10)
       tpca <- irlba::prcomp_irlba(dcos, n = max(2, ncomp), center = T, scale. = T)$rotation
+      rownames(tpca) <- colnames(obj@Scrna$Deviances)
+      # tpca <- RSpectra::eigs_sym(dcos, k = ncomp)$vectors
       obj@Transformations$Scrna$Cosine <- list(Eigen = tpca)
       gc()
     
@@ -520,6 +529,8 @@ ComputeTransformations <- function(obj, method = "Seurat"){
       # ncomp <- round(intrinsicDimension::maxLikGlobalDimEst(A, unbiased = TRUE, k = 15)$dim.est)
       ncomp <- min(dim(obj@Seurat$Sig.PCs.Data)[2], dim(obj@Scrna$Sig.PCs.Data)[2], dim(obj@SCTransform$Sig.PCs.Data)[2])
       tpca <- irlba::prcomp_irlba(A, n = max(2, ncomp), center = T, scale. = T)$rotation
+      rownames(tpca) <- colnames(obj@Scrna$Deviances)
+      # tpca <- RSpectra::eigs_sym(A, k = ncomp)$vectors
       obj@Transformations$All$PCA <- tpca
       
       gc()
