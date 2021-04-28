@@ -541,7 +541,7 @@ ComputeTransformations <- function(obj, method = "Seurat"){
  
 }
 
-# write a function to run teh various methods
+# write a function to run the various methods
 RunMethods <- function(obj){
   # compute labels
   message("\nRunning Significance Clustering On Log Model")
